@@ -146,6 +146,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         if self._namespace_mode == Mode.SC:
             self._base_read_policy = self._base_read_policy_sc
             self._base_write_policy = self._base_write_policy_sc
+            self._base_write_policy_nr = self._base_write_policy_nr_sc
             self._base_read_operate_policy = self._base_read_operate_policy_sc
 
     async def _ensure_batch_namespace_modes(self) -> None:
@@ -452,7 +453,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
             return await self.execute(on_error)
 
         handler = on_error if callable(on_error) else None
-        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        batch_policy = self._batch_write_policy_for(self._specs)
         all_ops: list = []
         all_keys: List[Key] = []
         for spec in self._specs:
@@ -476,7 +477,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         handler: Optional[ErrorHandler],
     ) -> RecordStream:
         """Fold *specs* into one mixed ``batch`` call."""
-        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        batch_policy = self._batch_write_policy_for(specs)
         all_ops: list = []
         all_keys: List[Key] = []
         row_op_types: List[Optional[str]] = []
@@ -596,7 +597,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         fn = spec.udf_function
         if pkg is None or fn is None:
             raise ValueError("UDF spec missing package or function name")
-        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        batch_policy = self._batch_write_policy_for((spec,))
         if self._spec_modes_mixed(spec):
             # The batch UDF entry takes one policy for every key, and the
             # mixed-batch API has no per-row UDF op — group keys by mode,
@@ -684,15 +685,11 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         if has_ops and op_type not in ("delete", "touch", "exists", "udf"):
             # Write via operate — PNC builds the per-call policy in Rust from
             # the session-cached base WritePolicy + REA + overrides.
-            if self._base_write_policy is None:
-                self._base_write_policy = self._apply_txn(to_write_policy(
-                    self._behavior.get_settings(
-                        OpKind.WRITE_NON_RETRYABLE, OpShape.POINT,
-                        self._resolved_namespace_mode())))
+            base = self._plain_write_policy(spec, self._point_write_settings(spec))
             try:
                 record = await self._client.operate(
                     key, spec.operations,
-                    policy=self._base_write_policy,
+                    policy=base,
                     record_exists_action=_OP_TYPE_TO_REA.get(op_type),
                     durable_delete=False,
                     txn=self._txn,
@@ -810,7 +807,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         which carries a policy per row (``_spec_to_batch_ops`` resolves it
         per key's mode).
         """
-        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        batch_policy = self._batch_write_policy_for((spec,))
         all_ops = self._spec_to_batch_ops(spec)
         try:
             batch_records = await self._client.batch(all_ops, batch_policy=batch_policy)
@@ -825,7 +822,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         if spec.contains_record_delete_op and self._spec_modes_mixed(spec):
             return await self._execute_spec_mixed_mode_batch(
                 spec, disp, handler, op_type=spec.op_type)
-        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        batch_policy = self._batch_write_policy_for((spec,))
         bwp = self._make_batch_write_policy(spec)
         ops_per_key = [spec.operations] * len(spec.keys)
         try:
@@ -854,7 +851,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         if self._spec_modes_mixed(spec):
             return await self._execute_spec_mixed_mode_batch(
                 spec, disp, handler, op_type="delete")
-        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        batch_policy = self._batch_write_policy_for((spec,))
         bdp = self._make_batch_delete_policy(spec)
         try:
             if (
@@ -890,7 +887,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         self, spec: _OperationSpec,
         disp: _ErrorDisposition, handler: ErrorHandler | None,
     ) -> RecordStream:
-        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        batch_policy = self._batch_write_policy_for((spec,))
         bwp = self._make_batch_write_policy(spec)
         touch_ops = [Operation.touch()]
         ops_per_key = [touch_ops] * len(spec.keys)
@@ -1120,6 +1117,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
         "_client_fast", "_key", "_op_type_fast", "_ops",
         "_write_policy", "_behavior_fast", "_read_policy",
         "_write_policy_sc", "_read_policy_sc",
+        "_write_policy_nr", "_write_policy_nr_sc",
         "_txn", "_namespace_mode_resolver", "_namespace_mode_resolver_blocking",
         # _sdk_client_fast must stay slotted: it is stored on every
         # `session.upsert(...)` fast ctor, and an unslotted store would
@@ -1137,19 +1135,22 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
         """Populate ``self._qb`` so inherited WriteSegmentBuilder methods work."""
         if self._qb is not None:
             return
+        write_policy, write_policy_sc = self._retryable_policy_pair()
         qb = QueryBuilder(
             client=self._client_fast,
             sdk_client=self._sdk_client_fast,
             namespace=self._key.namespace,
             set_name=self._key.set_name,
             behavior=self._behavior_fast,
-            cached_write_policy=self._write_policy,
+            cached_write_policy=write_policy,
             cached_read_policy=self._read_policy,
-            cached_write_policy_sc=self._write_policy_sc,
+            cached_write_policy_sc=write_policy_sc,
             cached_read_policy_sc=self._read_policy_sc,
             txn=self._txn,
             namespace_mode_resolver=self._namespace_mode_resolver,
             namespace_mode_resolver_blocking=self._namespace_mode_resolver_blocking,
+            cached_write_policy_nr=self._write_policy_nr,
+            cached_write_policy_nr_sc=self._write_policy_nr_sc,
         )
         qb._op_type = self._op_type_fast
         qb._single_key = self._key
@@ -1157,6 +1158,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
         qb._durable_delete_command_default = self._dd_command_default
         qb._durable_delete = self._dd_override
         qb._record_delete_in_operations = self._record_delete_in_fast_ops
+        qb._operations_retryable = self._retryable_fast
         self._qb = qb
 
     # -- Execution -----------------------------------------------------------
@@ -1311,7 +1313,7 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
         if rea is not None:
             wp = to_write_policy(
                 self._behavior_fast.get_settings(
-                    OpKind.WRITE_NON_RETRYABLE, OpShape.POINT, mode))
+                    self._write_kind_fast(), OpShape.POINT, mode))
             wp.record_exists_action = rea
         else:
             wp = self._get_write_policy(mode)

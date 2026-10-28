@@ -307,6 +307,11 @@ class _OperationSpec:
     ``put_bins`` holds the segment's leading ``put(bins)`` writes as a dict
     so the batch path can hand it to PNC whole, skipping an ``Operation``
     per bin. Every other path reads :attr:`operations`, which expands it.
+
+    ``retryable`` is ``False`` once the segment carries an operation that is
+    not idempotent (``add``, ``append``, ``prepend``, any list, map, bit,
+    HLL, string, or expression modify) or a UDF; it selects the behavior's
+    retryable or non-retryable write scope.
     """
 
     keys: List[Key]
@@ -320,6 +325,7 @@ class _OperationSpec:
     durable_delete: Optional[bool] = None
     durable_delete_command_default: Optional[bool] = None
     contains_record_delete_op: bool = False
+    retryable: bool = True
     udf_package: Optional[str] = None
     udf_function: Optional[str] = None
     udf_args: Optional[List[Any]] = None
@@ -332,6 +338,11 @@ class _OperationSpec:
             self.op_list[:0] = [Operation.put(name, value) for name, value in put_bins.items()]
             self.put_bins = None
         return self.op_list
+
+
+def _write_kind(spec: _OperationSpec) -> OpKind:
+    """The behavior scope a write spec resolves: retryable only when every op is idempotent."""
+    return OpKind.WRITE_RETRYABLE if spec.retryable else OpKind.WRITE_NON_RETRYABLE
 
 
 class _SupportsAddOperation(Protocol):
@@ -363,6 +374,7 @@ class _SupportsBinWrites(Protocol):
 
     def add_operation(self, op: Any) -> Self: ...
     def _add_op(self, op: Any) -> Self: ...
+    def _add_modify_op(self, op: Any) -> Self: ...
     def _expression_from_ael_string_for_ops(
         self, expression: Union[str, FilterExpression],
     ) -> FilterExpression: ...
@@ -371,7 +383,6 @@ class _SupportsBinWrites(Protocol):
 _W = TypeVar("_W", bound=_SupportsBinWrites)
 
 
-_UNRESOLVED = object()
 
 
 class _QueryBuilderBase:
@@ -427,6 +438,9 @@ class _QueryBuilderBase:
     _durable_delete: Optional[bool] = None
     _durable_delete_command_default: Optional[bool] = None
     _record_delete_in_operations: bool = False
+    # Cleared by the first non-idempotent operation queued on the segment;
+    # see ``_OperationSpec.retryable``.
+    _operations_retryable: bool = True
     # Puts queued ahead of ``_operations``; see ``_OperationSpec.put_bins``.
     _put_bins: Optional[Dict[str, Any]] = None
     _default_filter_expression: Optional[FilterExpression] = None
@@ -446,12 +460,12 @@ class _QueryBuilderBase:
     # whether any key in the batch lands in an SC namespace.
     _batch_namespace_modes: Optional[Dict[str, Mode]] = None
     _batch_any_sc: bool = False
-    # Batch commit level, resolved once per builder per mode. A chain of many
-    # single-key segments builds one row policy per segment, and the behavior
-    # lookup behind each would otherwise repeat for every segment.
-    _batch_commit_level_ap: Any = _UNRESOLVED
-    _batch_commit_level_sc: Any = _UNRESOLVED
-    # Row policies for plain write segments, keyed by (verb, TTL, mode). A
+    # Batch commit level, resolved once per builder per (mode, retryable). A
+    # chain of many single-key segments builds one row policy per segment,
+    # and the behavior lookup behind each would otherwise repeat per segment.
+    _batch_commit_levels: Optional[Dict[tuple, Optional[CommitLevel]]] = None
+    # Row policies for plain write segments, keyed by (verb, TTL, mode,
+    # retryable). A
     # chain of many single-key segments would otherwise allocate an identical
     # policy per segment.
     _plain_batch_write_policies: Optional[Dict[tuple, Optional[BatchWritePolicy]]] = None
@@ -484,6 +498,8 @@ class _QueryBuilderBase:
         sdk_client: Optional[Any] = None,
         supports_server_compiled_ael: Optional[bool] = None,
         supports_query_selection: Optional[bool] = None,
+        cached_write_policy_nr: Optional[WritePolicy] = None,
+        cached_write_policy_nr_sc: Optional[WritePolicy] = None,
     ) -> None:
         """
         Initialize a QueryBuilder.
@@ -494,7 +510,10 @@ class _QueryBuilderBase:
             set_name: The set name.
             behavior: The Behavior every policy this builder sends is derived from.
             cached_read_policy: Pre-computed read policy from the session.
-            cached_write_policy: Pre-computed write policy from the session.
+            cached_write_policy: Pre-computed retryable write policy from
+                the session; ``cached_write_policy_nr`` is its non-retryable
+                counterpart, picked when a segment carries a non-idempotent
+                operation.
             cached_read_operate_policy: Pre-computed policy for single-key
                 operate calls that only read, from the session.
             txn: Optional active :class:`~aerospike_native.Txn` captured from
@@ -564,6 +583,8 @@ class _QueryBuilderBase:
             # mode at use time and pick the right cached policy.
             self._base_read_policy_sc: Optional[ReadPolicy] = cached_read_policy_sc
             self._base_write_policy_sc: Optional[WritePolicy] = cached_write_policy_sc
+            self._base_write_policy_nr: Optional[WritePolicy] = cached_write_policy_nr
+            self._base_write_policy_nr_sc: Optional[WritePolicy] = cached_write_policy_nr_sc
             self._base_read_operate_policy: Optional[WritePolicy] = cached_read_operate_policy
             self._base_read_operate_policy_sc: Optional[WritePolicy] = (
                 cached_read_operate_policy_sc)
@@ -572,6 +593,8 @@ class _QueryBuilderBase:
             self._base_write_policy = None
             self._base_read_policy_sc = None
             self._base_write_policy_sc = None
+            self._base_write_policy_nr = None
+            self._base_write_policy_nr_sc = None
             self._base_read_operate_policy = None
             self._base_read_operate_policy_sc = None
 
@@ -1497,6 +1520,7 @@ class _QueryBuilderBase:
             self._durable_delete,
             self._durable_delete_command_default,
             self._record_delete_in_operations,
+            self._operations_retryable,
         ))
 
         self._single_key = None
@@ -1513,6 +1537,7 @@ class _QueryBuilderBase:
         self._durable_delete = None
         self._durable_delete_command_default = None
         self._record_delete_in_operations = False
+        self._operations_retryable = True
 
     def _finalize_chain(self) -> None:
         """Close the last segment, then give each spec the chain defaults it lacks.
@@ -1620,6 +1645,7 @@ class _QueryBuilderBase:
             durable_delete=self._durable_delete,
             durable_delete_command_default=self._durable_delete_command_default,
             contains_record_delete_op=False,
+            retryable=False,
             udf_package=self._udf_package,
             udf_function=self._udf_function,
             udf_args=udf_args,
@@ -1638,6 +1664,7 @@ class _QueryBuilderBase:
         self._durable_delete = None
         self._durable_delete_command_default = None
         self._record_delete_in_operations = False
+        self._operations_retryable = True
         self._clear_pending_udf_state()
 
     def _specs_require_sequential_run(self) -> bool:
@@ -1705,7 +1732,7 @@ class _QueryBuilderBase:
         self, spec: _OperationSpec, mode: Optional[Mode] = None,
     ) -> Optional[BatchUDFPolicy]:
         settings = self._behavior.get_settings(
-            OpKind.WRITE_NON_RETRYABLE,
+            _write_kind(spec),
             OpShape.BATCH,
             mode if mode is not None else self._resolved_namespace_mode(),
         )
@@ -1714,7 +1741,7 @@ class _QueryBuilderBase:
             spec.durable_delete_command_default,
             spec.durable_delete,
         )
-        commit_level = self._batch_commit_level(mode)
+        commit_level = self._batch_commit_level(mode, spec.retryable)
         send_key = bool(settings.send_key)
         has_settings = (
             spec.filter_expression is not None
@@ -1971,23 +1998,39 @@ class _QueryBuilderBase:
                     OpKind.READ, OpShape.POINT, self._resolved_namespace_mode())))
         return self._base_read_operate_policy
 
-    def _make_write_policy(self, spec: _OperationSpec) -> WritePolicy:
-        """Build a ``WritePolicy`` for single-key writes."""
-        op_type = spec.op_type or "upsert"
-        rea = _OP_TYPE_TO_REA.get(op_type)
-        settings = self._behavior.get_settings(
-            OpKind.WRITE_NON_RETRYABLE, OpShape.POINT,
-            self._resolved_namespace_mode(),
+    def _point_write_settings(self, spec: _OperationSpec) -> Settings:
+        """Behavior settings for a single-key write, by the spec's retryability."""
+        return self._behavior.get_settings(
+            _write_kind(spec), OpShape.POINT, self._resolved_namespace_mode(),
         )
-        applies_dd = op_type == "delete" or spec.contains_record_delete_op
-        effective_dd = self._effective_point_durable_delete(spec, settings)
 
-        if self._base_write_policy is None:
+    def _plain_write_policy(self, spec: _OperationSpec, settings: Settings) -> WritePolicy:
+        """The override-free ``WritePolicy`` for the spec's kind, built once per kind.
+
+        Durable delete is forced off on the plain policy: the delete-bearing
+        specs resolve it themselves and never take this policy.
+        """
+        base = self._base_write_policy if spec.retryable else self._base_write_policy_nr
+        if base is None:
             base_settings = settings
             if base_settings.durable_delete:
                 base_settings = Settings.merge(
                     base_settings, Settings(durable_delete=False))
-            self._base_write_policy = self._apply_txn(to_write_policy(base_settings))
+            base = self._apply_txn(to_write_policy(base_settings))
+            if spec.retryable:
+                self._base_write_policy = base
+            else:
+                self._base_write_policy_nr = base
+        return base
+
+    def _make_write_policy(self, spec: _OperationSpec) -> WritePolicy:
+        """Build a ``WritePolicy`` for single-key writes."""
+        op_type = spec.op_type or "upsert"
+        rea = _OP_TYPE_TO_REA.get(op_type)
+        settings = self._point_write_settings(spec)
+        applies_dd = op_type == "delete" or spec.contains_record_delete_op
+        effective_dd = self._effective_point_durable_delete(spec, settings)
+
         if (
             rea is None
             and spec.filter_expression is None
@@ -1998,7 +2041,7 @@ class _QueryBuilderBase:
             and not spec.contains_record_delete_op
             and not applies_dd
         ):
-            return self._base_write_policy
+            return self._plain_write_policy(spec, settings)
         wp = self._apply_txn(to_write_policy(settings))
         if rea is not None:
             wp.record_exists_action = rea
@@ -2030,8 +2073,8 @@ class _QueryBuilderBase:
             self._batch_write_effective_dd(spec, mode)
             if spec.contains_record_delete_op else False
         )
-        commit_level = self._batch_commit_level(mode)
-        send_key = self._batch_send_key(mode)
+        commit_level = self._batch_commit_level(mode, spec.retryable)
+        send_key = self._batch_send_key(mode, spec.retryable)
         has_settings = (
             rea is not None
             or spec.filter_expression is not None
@@ -2228,6 +2271,19 @@ class _QueryBuilderBase:
         return self._apply_txn(to_batch_policy(self._behavior.get_settings(
             op_kind, op_shape, self._resolved_batch_mode())))
 
+    def _batch_write_policy_for(self, specs: Sequence[_OperationSpec]) -> BatchPolicy:
+        """Parent ``BatchPolicy`` for a batch carrying writes.
+
+        The parent's retry budget covers every row, so it is retryable only
+        when every row is; each row's own policy still resolves its own kind.
+        """
+        kind = OpKind.WRITE_RETRYABLE
+        for spec in specs:
+            if not spec.retryable:
+                kind = OpKind.WRITE_NON_RETRYABLE
+                break
+        return self._batch_policy_for(kind, OpShape.BATCH)
+
     def bin(self, bin_name: str) -> QueryBinBuilder[QueryBuilder]:
         """Start a bin-level read operation.
 
@@ -2402,11 +2458,7 @@ class _QueryBuilderBase:
         return statement
 
     def _make_udf_write_policy(self, spec: _OperationSpec) -> WritePolicy:
-        settings = self._behavior.get_settings(
-            OpKind.WRITE_NON_RETRYABLE,
-            OpShape.POINT,
-            self._resolved_namespace_mode(),
-        )
+        settings = self._point_write_settings(spec)
         wp = self._apply_txn(to_write_policy(settings))
         wp.durable_delete = resolve_durable_delete(
             settings.durable_delete,
@@ -2439,7 +2491,7 @@ class _QueryBuilderBase:
         builder's resolved mode (single-namespace batches).
         """
         bset = self._behavior.get_settings(
-            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH,
+            _write_kind(spec), OpShape.BATCH,
             mode if mode is not None else self._resolved_namespace_mode(),
         )
         return resolve_durable_delete(
@@ -2448,7 +2500,9 @@ class _QueryBuilderBase:
             spec.durable_delete,
         )
 
-    def _batch_commit_level(self, mode: Optional[Mode] = None) -> Optional[CommitLevel]:
+    def _batch_commit_level(
+        self, mode: Optional[Mode] = None, retryable: bool = True,
+    ) -> Optional[CommitLevel]:
         """Resolved commit level for a batch write row, or ``None`` to keep the default.
 
         The behavior's commit level applies to batch writes exactly as it does
@@ -2460,29 +2514,30 @@ class _QueryBuilderBase:
         """
         if mode is None:
             mode = self._resolved_namespace_mode()
-        is_sc = mode is Mode.SC
-        cl = self._batch_commit_level_sc if is_sc else self._batch_commit_level_ap
-        if cl is not _UNRESOLVED:
-            return cl
+        cache = self._batch_commit_levels
+        if cache is None:
+            cache = self._batch_commit_levels = {}
+        cache_key = (mode is Mode.SC, retryable)
+        if cache_key in cache:
+            return cache[cache_key]
         cl = self._behavior.get_settings(
-            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH, mode,
+            OpKind.WRITE_RETRYABLE if retryable else OpKind.WRITE_NON_RETRYABLE,
+            OpShape.BATCH, mode,
         ).commit_level
         if cl is None or cl == CommitLevel.COMMIT_ALL:
             cl = None
-        if is_sc:
-            self._batch_commit_level_sc = cl
-        else:
-            self._batch_commit_level_ap = cl
+        cache[cache_key] = cl
         return cl
 
-    def _batch_send_key(self, mode: Optional[Mode] = None) -> bool:
+    def _batch_send_key(self, mode: Optional[Mode] = None, retryable: bool = True) -> bool:
         """Whether a batch write row stores the user key, per the behavior.
 
         The batch policy has no ``send_key`` of its own: each row policy
         carries one, so a row built without it never stores the key.
         """
         return bool(self._behavior.get_settings(
-            OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH,
+            OpKind.WRITE_RETRYABLE if retryable else OpKind.WRITE_NON_RETRYABLE,
+            OpShape.BATCH,
             mode if mode is not None else self._resolved_namespace_mode(),
         ).send_key)
 
@@ -2494,8 +2549,8 @@ class _QueryBuilderBase:
         *mode* scopes the durable-delete default to the row's namespace mode.
         """
         eff = self._batch_write_effective_dd(spec, mode)
-        commit_level = self._batch_commit_level(mode)
-        send_key = self._batch_send_key(mode)
+        commit_level = self._batch_commit_level(mode, spec.retryable)
+        send_key = self._batch_send_key(mode, spec.retryable)
         has_settings = (
             spec.filter_expression is not None
             or spec.generation is not None
@@ -2634,7 +2689,7 @@ class _QueryBuilderBase:
             cache = self._plain_batch_write_policies
             if cache is None:
                 cache = self._plain_batch_write_policies = {}
-            cache_key = (spec.op_type, spec.ttl_seconds, mode)
+            cache_key = (spec.op_type, spec.ttl_seconds, mode, spec.retryable)
             if cache_key in cache:
                 return cache[cache_key]
             bwp = cache[cache_key] = self._build_batch_write_policy(spec, mode)
@@ -2652,8 +2707,8 @@ class _QueryBuilderBase:
             self._batch_write_effective_dd(spec, mode)
             if spec.contains_record_delete_op else False
         )
-        commit_level = self._batch_commit_level(mode)
-        send_key = self._batch_send_key(mode)
+        commit_level = self._batch_commit_level(mode, spec.retryable)
+        send_key = self._batch_send_key(mode, spec.retryable)
         has_settings = (
             rea is not None
             or spec.filter_expression is not None
@@ -2723,15 +2778,15 @@ class _BinWriteSteps(Generic[_W]):
 
     def add(self, value: Any) -> _W:
         """Add a numeric *value* to the bin (``Operation.add``)."""
-        return self._parent._add_op(Operation.add(self._bin, value))
+        return self._parent._add_modify_op(Operation.add(self._bin, value))
 
     def append(self, value: str) -> _W:
         """String append (``Operation.append``)."""
-        return self._parent._add_op(Operation.append(self._bin, value))
+        return self._parent._add_modify_op(Operation.append(self._bin, value))
 
     def prepend(self, value: str) -> _W:
         """String prepend (``Operation.prepend``)."""
-        return self._parent._add_op(Operation.prepend(self._bin, value))
+        return self._parent._add_modify_op(Operation.prepend(self._bin, value))
 
     def remove(self) -> _W:
         """Drop the bin (write ``None``)."""
@@ -2765,7 +2820,7 @@ class _BinWriteSteps(Generic[_W]):
             ListOrderType.ORDERED, unique=unique, bounded=bounded,
             no_fail=no_fail,
         )
-        return self._parent._add_op(
+        return self._parent.add_operation(
             ListOperation.append(self._bin, value, policy),
         )
 
@@ -2790,7 +2845,7 @@ class _BinWriteSteps(Generic[_W]):
         policy = _resolve_list_policy(
             None, unique=unique, bounded=bounded, no_fail=no_fail,
         )
-        return self._parent._add_op(
+        return self._parent.add_operation(
             ListOperation.append(self._bin, value, policy),
         )
 
@@ -2802,7 +2857,7 @@ class _BinWriteSteps(Generic[_W]):
         Returns:
             The parent builder, for chaining.
         """
-        return self._parent._add_op(MapOperation.clear(self._bin))
+        return self._parent.add_operation(MapOperation.clear(self._bin))
 
     def map_size(self) -> _W:
         """Return the map element count (read within operate).
@@ -2810,7 +2865,7 @@ class _BinWriteSteps(Generic[_W]):
         Returns:
             The parent builder, for chaining.
         """
-        return self._parent._add_op(MapOperation.size(self._bin))
+        return self._parent.add_operation(MapOperation.size(self._bin))
 
     def map_upsert_items(
         self, items: Any,
@@ -2838,7 +2893,7 @@ class _BinWriteSteps(Generic[_W]):
             order=order, persist_index=persist_index,
             no_fail=no_fail, partial=partial,
         )
-        return self._parent._add_op(
+        return self._parent.add_operation(
             MapOperation.put_items(self._bin, pairs, policy),
         )
 
@@ -2865,7 +2920,7 @@ class _BinWriteSteps(Generic[_W]):
             order=order, persist_index=persist_index,
             no_fail=no_fail, partial=partial,
         )
-        return self._parent._add_op(
+        return self._parent.add_operation(
             MapOperation.put_items(self._bin, pairs, policy),
         )
 
@@ -2895,7 +2950,7 @@ class _BinWriteSteps(Generic[_W]):
             order=order, persist_index=persist_index,
             no_fail=no_fail, partial=partial,
         )
-        return self._parent._add_op(
+        return self._parent.add_operation(
             MapOperation.put_items(self._bin, pairs, policy),
         )
 
@@ -2908,7 +2963,7 @@ class _BinWriteSteps(Generic[_W]):
         Returns:
             The parent builder, for chaining.
         """
-        return self._parent._add_op(MapOperation.create(self._bin, order))
+        return self._parent.add_operation(MapOperation.create(self._bin, order))
 
     def map_set_policy(self, order: MapOrder) -> _W:
         """Set map sort order policy without changing entries.
@@ -2919,7 +2974,7 @@ class _BinWriteSteps(Generic[_W]):
         Returns:
             The parent builder, for chaining.
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             MapOperation.set_map_policy(self._bin, MapPolicy(order, None)),
         )
 
@@ -2931,7 +2986,7 @@ class _BinWriteSteps(Generic[_W]):
         Returns:
             The parent builder, for chaining.
         """
-        return self._parent._add_op(ListOperation.clear(self._bin))
+        return self._parent.add_operation(ListOperation.clear(self._bin))
 
     def list_sort(
         self, flags: ListSortFlags = ListSortFlags.DEFAULT,
@@ -2944,7 +2999,7 @@ class _BinWriteSteps(Generic[_W]):
         Returns:
             The parent builder, for chaining.
         """
-        return self._parent._add_op(ListOperation.sort(self._bin, flags))
+        return self._parent.add_operation(ListOperation.sort(self._bin, flags))
 
     def list_size(self) -> _W:
         """Return the list element count (read within operate).
@@ -2952,7 +3007,7 @@ class _BinWriteSteps(Generic[_W]):
         Returns:
             The parent builder, for chaining.
         """
-        return self._parent._add_op(ListOperation.size(self._bin))
+        return self._parent.add_operation(ListOperation.size(self._bin))
 
     def list_join(self, separator: Optional[str] = None) -> _W:
         """Concatenate the string items of the list (read within operate).
@@ -2968,7 +3023,7 @@ class _BinWriteSteps(Generic[_W]):
         Returns:
             The parent builder, for chaining.
         """
-        return self._parent._add_op(ListOperation.join(self._bin, separator))
+        return self._parent.add_operation(ListOperation.join(self._bin, separator))
 
     def list_append_items(
         self, items: Any,
@@ -2991,7 +3046,7 @@ class _BinWriteSteps(Generic[_W]):
             None, unique=unique, bounded=bounded,
             no_fail=no_fail, partial=partial,
         )
-        return self._parent._add_op(
+        return self._parent.add_operation(
             ListOperation.append_items(self._bin, items, policy),
         )
 
@@ -3019,7 +3074,7 @@ class _BinWriteSteps(Generic[_W]):
             ListOrderType.ORDERED, unique=unique, bounded=bounded,
             no_fail=no_fail, partial=partial,
         )
-        return self._parent._add_op(
+        return self._parent.add_operation(
             ListOperation.append_items(self._bin, items, policy),
         )
 
@@ -3039,7 +3094,7 @@ class _BinWriteSteps(Generic[_W]):
         Returns:
             The parent builder, for chaining.
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             ListOperation.create(self._bin, order, pad, persist_index),
         )
 
@@ -3052,7 +3107,7 @@ class _BinWriteSteps(Generic[_W]):
         Returns:
             The parent builder, for chaining.
         """
-        return self._parent._add_op(ListOperation.set_order(self._bin, order))
+        return self._parent.add_operation(ListOperation.set_order(self._bin, order))
 
     # -- Index-based list (whole-bin) ----------------------------------------
 
@@ -3081,7 +3136,7 @@ class _BinWriteSteps(Generic[_W]):
         policy = _resolve_list_policy(
             None, unique=unique, bounded=bounded, no_fail=no_fail,
         )
-        return self._parent._add_op(
+        return self._parent.add_operation(
             ListOperation.insert(self._bin, index, value, policy),
         )
 
@@ -3113,7 +3168,7 @@ class _BinWriteSteps(Generic[_W]):
             None, unique=unique, bounded=bounded,
             no_fail=no_fail, partial=partial,
         )
-        return self._parent._add_op(
+        return self._parent.add_operation(
             ListOperation.insert_items(self._bin, index, items, policy),
         )
 
@@ -3130,7 +3185,7 @@ class _BinWriteSteps(Generic[_W]):
         See Also:
             :meth:`list_get`
         """
-        return self._parent._add_op(ListOperation.set(self._bin, index, value))
+        return self._parent.add_operation(ListOperation.set(self._bin, index, value))
 
     def list_increment(self, index: int, value: int = 1) -> _W:
         """Add *value* to the numeric element at *index* (default increment is ``1``).
@@ -3146,10 +3201,10 @@ class _BinWriteSteps(Generic[_W]):
             :meth:`list_set`
         """
         if value == 1:
-            return self._parent._add_op(
+            return self._parent.add_operation(
                 ListOperation.increment_by_one(self._bin, index),
             )
-        return self._parent._add_op(
+        return self._parent.add_operation(
             ListOperation.increment(
                 self._bin, index, value, _UNORDERED_LIST_POLICY,
             ),
@@ -3167,7 +3222,7 @@ class _BinWriteSteps(Generic[_W]):
         See Also:
             :meth:`list_remove_range`
         """
-        return self._parent._add_op(ListOperation.remove(self._bin, index))
+        return self._parent.add_operation(ListOperation.remove(self._bin, index))
 
     def list_remove_range(
         self, index: int, count: Optional[int] = None,
@@ -3188,7 +3243,7 @@ class _BinWriteSteps(Generic[_W]):
             op = ListOperation.remove_range_from(self._bin, index)
         else:
             op = ListOperation.remove_range(self._bin, index, count)
-        return self._parent._add_op(op)
+        return self._parent.add_operation(op)
 
     def list_pop(self, index: int) -> _W:
         """Remove and return the element at *index* (read in the operate result).
@@ -3202,7 +3257,7 @@ class _BinWriteSteps(Generic[_W]):
         See Also:
             :meth:`list_pop_range`
         """
-        return self._parent._add_op(ListOperation.pop(self._bin, index))
+        return self._parent.add_operation(ListOperation.pop(self._bin, index))
 
     def list_pop_range(
         self, index: int, count: Optional[int] = None,
@@ -3223,7 +3278,7 @@ class _BinWriteSteps(Generic[_W]):
             op = ListOperation.pop_range_from(self._bin, index)
         else:
             op = ListOperation.pop_range(self._bin, index, count)
-        return self._parent._add_op(op)
+        return self._parent.add_operation(op)
 
     def list_trim(self, index: int, count: int) -> _W:
         """Keep only *count* elements starting at *index*; remove the rest.
@@ -3238,7 +3293,7 @@ class _BinWriteSteps(Generic[_W]):
         See Also:
             :meth:`list_remove_range`
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             ListOperation.trim(self._bin, index, count),
         )
 
@@ -3288,7 +3343,7 @@ class _BinWriteSteps(Generic[_W]):
             create_only=create_only, update_only=update_only,
             no_fail=no_fail, allow_fold=allow_fold,
         )
-        return self._parent._add_op(
+        return self._parent.add_operation(
             HllOperation.init(
                 self._bin,
                 config.index_bit_count,
@@ -3346,7 +3401,7 @@ class _BinWriteSteps(Generic[_W]):
         )
         index_bit_count = config.index_bit_count if config is not None else -1
         min_hash_bit_count = config.min_hash_bit_count if config is not None else -1
-        return self._parent._add_op(
+        return self._parent.add_operation(
             HllOperation.add(
                 self._bin,
                 list(values),
@@ -3399,7 +3454,7 @@ class _BinWriteSteps(Generic[_W]):
             create_only=create_only, update_only=update_only,
             no_fail=no_fail, allow_fold=allow_fold,
         )
-        return self._parent._add_op(
+        return self._parent.add_operation(
             HllOperation.set_union(self._bin, list(hll_list), flags),
         )
 
@@ -3418,7 +3473,7 @@ class _BinWriteSteps(Generic[_W]):
         See Also:
             :meth:`hll_init`: Initial precision when creating a sketch.
         """
-        return self._parent._add_op(HllOperation.fold(self._bin, index_bit_count))
+        return self._parent.add_operation(HllOperation.fold(self._bin, index_bit_count))
 
     def hll_refresh_count(self) -> _W:
         """Refresh the cached cardinality estimate stored with the sketch.
@@ -3432,7 +3487,7 @@ class _BinWriteSteps(Generic[_W]):
         See Also:
             :meth:`hll_get_count`: Read the estimate in the same batch.
         """
-        return self._parent._add_op(HllOperation.refresh_count(self._bin))
+        return self._parent.add_operation(HllOperation.refresh_count(self._bin))
 
     def hll_get_count(self) -> _W:
         """Read the estimated cardinality in a multi-operation write (``operate``).
@@ -3450,7 +3505,7 @@ class _BinWriteSteps(Generic[_W]):
             :meth:`QueryBinBuilder.hll_get_count`: Same read on a query builder.
             :meth:`hll_add`: Populate the sketch before counting.
         """
-        return self._parent._add_op(HllOperation.get_count(self._bin))
+        return self._parent.add_operation(HllOperation.get_count(self._bin))
 
     def hll_describe(self) -> _W:
         """Read index and min-hash bit counts describing the stored sketch.
@@ -3464,7 +3519,7 @@ class _BinWriteSteps(Generic[_W]):
         See Also:
             :meth:`QueryBinBuilder.hll_describe`: Same read on a query builder.
         """
-        return self._parent._add_op(HllOperation.describe(self._bin))
+        return self._parent.add_operation(HllOperation.describe(self._bin))
 
     def hll_get_union(self, hll_list: Sequence[Any]) -> _W:
         """Read the union sketch without modifying the stored bin.
@@ -3482,7 +3537,7 @@ class _BinWriteSteps(Generic[_W]):
             :meth:`QueryBinBuilder.hll_get_union`: Same read on a query builder.
             :meth:`hll_set_union`: Persist a union into the bin.
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             HllOperation.get_union(self._bin, list(hll_list)),
         )
 
@@ -3501,7 +3556,7 @@ class _BinWriteSteps(Generic[_W]):
         See Also:
             :meth:`QueryBinBuilder.hll_get_union_count`: Same read on a query.
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             HllOperation.get_union_count(self._bin, list(hll_list)),
         )
 
@@ -3520,7 +3575,7 @@ class _BinWriteSteps(Generic[_W]):
         See Also:
             :meth:`QueryBinBuilder.hll_get_intersect_count`: Same read on a query.
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             HllOperation.get_intersect_count(self._bin, list(hll_list)),
         )
 
@@ -3539,7 +3594,7 @@ class _BinWriteSteps(Generic[_W]):
         See Also:
             :meth:`QueryBinBuilder.hll_get_similarity`: Same read on a query.
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             HllOperation.get_similarity(self._bin, list(hll_list)),
         )
 
@@ -3572,7 +3627,7 @@ class _BinWriteSteps(Generic[_W]):
             :meth:`bit_insert`: Insert raw bytes at an offset.
             :meth:`QueryBinBuilder.bit_get`: Read bits in a query.
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             BitOperation.resize(
                 self._bin,
                 byte_size,
@@ -3603,7 +3658,7 @@ class _BinWriteSteps(Generic[_W]):
         See Also:
             :meth:`bit_remove`: Remove a byte range.
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             BitOperation.insert(
                 self._bin,
                 byte_offset,
@@ -3634,7 +3689,7 @@ class _BinWriteSteps(Generic[_W]):
         See Also:
             :meth:`bit_insert`: Insert bytes at an offset.
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             BitOperation.remove(
                 self._bin,
                 byte_offset,
@@ -3671,7 +3726,7 @@ class _BinWriteSteps(Generic[_W]):
             :meth:`bit_get`: Read the same range in an operate or query.
             :meth:`bit_or`, :meth:`bit_xor`, :meth:`bit_and`, :meth:`bit_not`
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             BitOperation.set(
                 self._bin,
                 bit_offset,
@@ -3707,7 +3762,7 @@ class _BinWriteSteps(Generic[_W]):
             :meth:`bit_xor`
             :meth:`bit_not`
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             _bitwise_or(
                 self._bin,
                 bit_offset,
@@ -3743,7 +3798,7 @@ class _BinWriteSteps(Generic[_W]):
             :meth:`bit_and`
             :meth:`bit_not`
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             BitOperation.xor(
                 self._bin,
                 bit_offset,
@@ -3779,7 +3834,7 @@ class _BinWriteSteps(Generic[_W]):
             :meth:`bit_xor`
             :meth:`bit_not`
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             _bitwise_and(
                 self._bin,
                 bit_offset,
@@ -3813,7 +3868,7 @@ class _BinWriteSteps(Generic[_W]):
             :meth:`bit_xor`
             :meth:`bit_and`
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             _bitwise_not(
                 self._bin,
                 bit_offset,
@@ -3846,7 +3901,7 @@ class _BinWriteSteps(Generic[_W]):
         See Also:
             :meth:`bit_rshift`
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             BitOperation.lshift(
                 self._bin,
                 bit_offset,
@@ -3880,7 +3935,7 @@ class _BinWriteSteps(Generic[_W]):
         See Also:
             :meth:`bit_lshift`
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             BitOperation.rshift(
                 self._bin,
                 bit_offset,
@@ -3923,7 +3978,7 @@ class _BinWriteSteps(Generic[_W]):
             :meth:`bit_set_int`
             :meth:`bit_get_int`
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             BitOperation.add(
                 self._bin,
                 bit_offset,
@@ -3965,7 +4020,7 @@ class _BinWriteSteps(Generic[_W]):
             :meth:`bit_add`
             :meth:`bit_set_int`
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             BitOperation.subtract(
                 self._bin,
                 bit_offset,
@@ -4002,7 +4057,7 @@ class _BinWriteSteps(Generic[_W]):
             :meth:`bit_get_int`
             :meth:`bit_add`
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             BitOperation.set_int(
                 self._bin,
                 bit_offset,
@@ -4031,7 +4086,7 @@ class _BinWriteSteps(Generic[_W]):
             :meth:`QueryBinBuilder.bit_get`
             :meth:`bit_set`
         """
-        return self._parent._add_op(BitOperation.get(self._bin, bit_offset, bit_size))
+        return self._parent.add_operation(BitOperation.get(self._bin, bit_offset, bit_size))
 
     def bit_count(self, bit_offset: int, bit_size: int) -> _W:
         """Count bits set to ``1`` in ``bit_size`` bits starting at ``bit_offset``.
@@ -4049,7 +4104,7 @@ class _BinWriteSteps(Generic[_W]):
         See Also:
             :meth:`QueryBinBuilder.bit_count`
         """
-        return self._parent._add_op(BitOperation.count(self._bin, bit_offset, bit_size))
+        return self._parent.add_operation(BitOperation.count(self._bin, bit_offset, bit_size))
 
     def bit_lscan(self, bit_offset: int, bit_size: int, value: bool) -> _W:
         """Return the leftmost bit index in the range matching ``value``.
@@ -4072,7 +4127,7 @@ class _BinWriteSteps(Generic[_W]):
             :meth:`bit_rscan`
             :meth:`QueryBinBuilder.bit_lscan`
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             BitOperation.lscan(self._bin, bit_offset, bit_size, value),
         )
 
@@ -4094,7 +4149,7 @@ class _BinWriteSteps(Generic[_W]):
             :meth:`bit_lscan`
             :meth:`QueryBinBuilder.bit_rscan`
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             BitOperation.rscan(self._bin, bit_offset, bit_size, value),
         )
 
@@ -4118,7 +4173,7 @@ class _BinWriteSteps(Generic[_W]):
             :meth:`QueryBinBuilder.bit_get_int`
             :meth:`bit_set_int`
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             BitOperation.get_int(self._bin, bit_offset, bit_size, signed),
         )
 
@@ -4166,7 +4221,7 @@ class _BinWriteSteps(Generic[_W]):
             :meth:`QueryBinBuilder.bit_b64_encode`
             :meth:`str_b64_decode`
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             BitOperation.b64_encode(self._bin, byte_offset, byte_size, invert_size),
         )
 
@@ -4207,7 +4262,7 @@ class _BinWriteSteps(Generic[_W]):
             :meth:`QueryBinBuilder.str_strlen`: Same read on a query builder.
             :meth:`str_byte_length`: UTF-8 byte length instead of codepoint count.
         """
-        return self._parent._add_op(StringOperation.strlen(self._bin))
+        return self._parent.add_operation(StringOperation.strlen(self._bin))
 
     def str_substr(self, start: int, end: Optional[int] = None) -> _W:
         """Register a substr read.
@@ -4237,7 +4292,7 @@ class _BinWriteSteps(Generic[_W]):
         Returns:
             The parent builder, for chaining.
         """
-        return self._parent._add_op(StringOperation.substr(self._bin, start, end))
+        return self._parent.add_operation(StringOperation.substr(self._bin, start, end))
 
     def str_char_at(self, index: int) -> _W:
         """Register a char-at read: returns the codepoint at ``index`` as a
@@ -4249,7 +4304,7 @@ class _BinWriteSteps(Generic[_W]):
         Returns:
             The parent builder, for chaining.
         """
-        return self._parent._add_op(StringOperation.char_at(self._bin, index))
+        return self._parent.add_operation(StringOperation.char_at(self._bin, index))
 
     def str_find(self, needle: str, occurrence: Optional[int] = None) -> _W:
         """Register a find read: codepoint index of the first occurrence of
@@ -4268,7 +4323,7 @@ class _BinWriteSteps(Generic[_W]):
         Returns:
             The parent builder, for chaining.
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             StringOperation.find(self._bin, needle, occurrence),
         )
 
@@ -4284,7 +4339,7 @@ class _BinWriteSteps(Generic[_W]):
         Returns:
             The parent builder, for chaining.
         """
-        return self._parent._add_op(StringOperation.contains(self._bin, needle))
+        return self._parent.add_operation(StringOperation.contains(self._bin, needle))
 
     def str_starts_with(self, prefix: str) -> _W:
         """Register a starts-with read: ``True`` iff this bin starts with ``prefix``.
@@ -4292,7 +4347,7 @@ class _BinWriteSteps(Generic[_W]):
         Matching is Unicode canonical, not byte-exact: a prefix in a different
         normalization form than the stored value still matches.
         """
-        return self._parent._add_op(StringOperation.starts_with(self._bin, prefix))
+        return self._parent.add_operation(StringOperation.starts_with(self._bin, prefix))
 
     def str_ends_with(self, suffix: str) -> _W:
         """Register an ends-with read: ``True`` iff this bin ends with ``suffix``.
@@ -4300,7 +4355,7 @@ class _BinWriteSteps(Generic[_W]):
         Matching is Unicode canonical, not byte-exact: a suffix in a different
         normalization form than the stored value still matches.
         """
-        return self._parent._add_op(StringOperation.ends_with(self._bin, suffix))
+        return self._parent.add_operation(StringOperation.ends_with(self._bin, suffix))
 
     def str_to_integer(self) -> _W:
         """Register a to-integer read: parses this bin as ``int64``.
@@ -4312,7 +4367,7 @@ class _BinWriteSteps(Generic[_W]):
         Returns:
             The parent builder, for chaining.
         """
-        return self._parent._add_op(StringOperation.to_integer(self._bin))
+        return self._parent.add_operation(StringOperation.to_integer(self._bin))
 
     def str_to_double(self) -> _W:
         """Register a to-double read: parses this bin as ``float64``.
@@ -4324,7 +4379,7 @@ class _BinWriteSteps(Generic[_W]):
         Returns:
             The parent builder, for chaining.
         """
-        return self._parent._add_op(StringOperation.to_double(self._bin))
+        return self._parent.add_operation(StringOperation.to_double(self._bin))
 
     def str_byte_length(self) -> _W:
         """Register a byte-length read: UTF-8 byte count of this string bin.
@@ -4332,7 +4387,7 @@ class _BinWriteSteps(Generic[_W]):
         Differs from :meth:`str_strlen` for non-ASCII content (where one
         codepoint can encode to multiple bytes).
         """
-        return self._parent._add_op(StringOperation.byte_length(self._bin))
+        return self._parent.add_operation(StringOperation.byte_length(self._bin))
 
     def str_is_numeric(self, numeric_type: Optional[StringNumericType] = None) -> _W:
         """Register an is-numeric read: ``True`` iff this bin parses as a number.
@@ -4354,21 +4409,21 @@ class _BinWriteSteps(Generic[_W]):
         Returns:
             The parent builder, for chaining.
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             StringOperation.is_numeric(self._bin, numeric_type),
         )
 
     def str_is_upper(self) -> _W:
         """Register an is-upper read: ``True`` iff every cased codepoint is uppercase."""
-        return self._parent._add_op(StringOperation.is_upper(self._bin))
+        return self._parent.add_operation(StringOperation.is_upper(self._bin))
 
     def str_is_lower(self) -> _W:
         """Register an is-lower read: ``True`` iff every cased codepoint is lowercase."""
-        return self._parent._add_op(StringOperation.is_lower(self._bin))
+        return self._parent.add_operation(StringOperation.is_lower(self._bin))
 
     def str_to_blob(self) -> _W:
         """Register a to-blob read: UTF-8 bytes of this string bin as a blob."""
-        return self._parent._add_op(StringOperation.to_blob(self._bin))
+        return self._parent.add_operation(StringOperation.to_blob(self._bin))
 
     def str_split(self, separator: Optional[str] = None) -> _W:
         """Register a split read.
@@ -4383,7 +4438,7 @@ class _BinWriteSteps(Generic[_W]):
         Returns:
             The parent builder, for chaining.
         """
-        return self._parent._add_op(StringOperation.split(self._bin, separator))
+        return self._parent.add_operation(StringOperation.split(self._bin, separator))
 
     def str_b64_decode(self) -> _W:
         """Register a base64-decode read: treats the bin as base64 text, returns bytes.
@@ -4391,7 +4446,7 @@ class _BinWriteSteps(Generic[_W]):
         Server returns ``OP_NOT_APPLICABLE`` (subcode
         ``SubCode.OPNOT_STRING_B64_INVALID``) if the bin is not valid base64.
         """
-        return self._parent._add_op(StringOperation.b64_decode(self._bin))
+        return self._parent.add_operation(StringOperation.b64_decode(self._bin))
 
     def str_regex_compare(self, pattern: str, flags: int | StringWriteFlags | StringRegexFlags = 0) -> _W:
         """Register a regex-compare read: ``True`` iff ``pattern`` matches this bin.
@@ -4418,7 +4473,7 @@ class _BinWriteSteps(Generic[_W]):
         Returns:
             The parent builder, for chaining.
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             StringOperation.regex_compare(self._bin, pattern, int(flags)),
         )
 
@@ -4439,7 +4494,7 @@ class _BinWriteSteps(Generic[_W]):
         Returns:
             The parent builder, for chaining.
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             StringOperation.insert(self._bin, index, value, flags=int(flags)),
         )
 
@@ -4451,7 +4506,7 @@ class _BinWriteSteps(Generic[_W]):
         Returns:
             The parent builder, for chaining.
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             StringOperation.overwrite(self._bin, index, value, flags=int(flags)),
         )
 
@@ -4468,7 +4523,7 @@ class _BinWriteSteps(Generic[_W]):
         Returns:
             The parent builder, for chaining.
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             StringOperation.concat(self._bin, value, flags=int(flags)),
         )
 
@@ -4485,7 +4540,7 @@ class _BinWriteSteps(Generic[_W]):
         Returns:
             The parent builder, for chaining.
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             StringOperation.append(self._bin, value, flags=int(flags)),
         )
 
@@ -4502,7 +4557,7 @@ class _BinWriteSteps(Generic[_W]):
         Returns:
             The parent builder, for chaining.
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             StringOperation.prepend(self._bin, value, flags=int(flags)),
         )
 
@@ -4529,7 +4584,7 @@ class _BinWriteSteps(Generic[_W]):
         Returns:
             The parent builder, for chaining.
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             StringOperation.snip(self._bin, start, end, flags=int(flags)),
         )
 
@@ -4543,7 +4598,7 @@ class _BinWriteSteps(Generic[_W]):
         Returns:
             The parent builder, for chaining.
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             StringOperation.replace(self._bin, needle, replacement, flags=int(flags)),
         )
 
@@ -4551,7 +4606,7 @@ class _BinWriteSteps(Generic[_W]):
         self, needle: str, replacement: str, *, flags: int | StringWriteFlags | StringRegexFlags = 0,
     ) -> _W:
         """Register a replace-all modify: replace every occurrence of ``needle``."""
-        return self._parent._add_op(
+        return self._parent.add_operation(
             StringOperation.replace_all(self._bin, needle, replacement, flags=int(flags)),
         )
 
@@ -4595,7 +4650,7 @@ class _BinWriteSteps(Generic[_W]):
         Returns:
             The parent builder, for chaining.
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             StringOperation.regex_replace(
                 self._bin, pattern, replacement, int(flags), write_flags=int(write_flags),
             ),
@@ -4603,34 +4658,34 @@ class _BinWriteSteps(Generic[_W]):
 
     def str_upper(self, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> _W:
         """Register an upper modify: uppercase the bin in place."""
-        return self._parent._add_op(StringOperation.upper(self._bin, flags=int(flags)))
+        return self._parent.add_operation(StringOperation.upper(self._bin, flags=int(flags)))
 
     def str_lower(self, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> _W:
         """Register a lower modify: lowercase the bin in place."""
-        return self._parent._add_op(StringOperation.lower(self._bin, flags=int(flags)))
+        return self._parent.add_operation(StringOperation.lower(self._bin, flags=int(flags)))
 
     def str_case_fold(self, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> _W:
         """Register a case-fold modify: locale-independent lowercase, useful for comparison keys."""
-        return self._parent._add_op(StringOperation.case_fold(self._bin, flags=int(flags)))
+        return self._parent.add_operation(StringOperation.case_fold(self._bin, flags=int(flags)))
 
     def str_normalize_nfc(self, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> _W:
         """Register a normalize-NFC modify: Unicode NFC normalization in place.
 
         Already-normalized strings are unchanged.
         """
-        return self._parent._add_op(StringOperation.normalize_nfc(self._bin, flags=int(flags)))
+        return self._parent.add_operation(StringOperation.normalize_nfc(self._bin, flags=int(flags)))
 
     def str_trim_start(self, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> _W:
         """Register a trim-start modify: strip whitespace from the start of the bin."""
-        return self._parent._add_op(StringOperation.trim_start(self._bin, flags=int(flags)))
+        return self._parent.add_operation(StringOperation.trim_start(self._bin, flags=int(flags)))
 
     def str_trim_end(self, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> _W:
         """Register a trim-end modify: strip whitespace from the end of the bin."""
-        return self._parent._add_op(StringOperation.trim_end(self._bin, flags=int(flags)))
+        return self._parent.add_operation(StringOperation.trim_end(self._bin, flags=int(flags)))
 
     def str_trim(self, *, flags: int | StringWriteFlags | StringRegexFlags = 0) -> _W:
         """Register a trim modify: strip whitespace from both ends of the bin."""
-        return self._parent._add_op(StringOperation.trim(self._bin, flags=int(flags)))
+        return self._parent.add_operation(StringOperation.trim(self._bin, flags=int(flags)))
 
     def str_pad_start(
         self, target_length: int, pad_string: str, *, flags: int | StringWriteFlags | StringRegexFlags = 0,
@@ -4639,7 +4694,7 @@ class _BinWriteSteps(Generic[_W]):
 
         No-op when the bin is already at or above ``target_length``.
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             StringOperation.pad_start(self._bin, target_length, pad_string, flags=int(flags)),
         )
 
@@ -4650,7 +4705,7 @@ class _BinWriteSteps(Generic[_W]):
 
         No-op when the bin is already at or above ``target_length``.
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             StringOperation.pad_end(self._bin, target_length, pad_string, flags=int(flags)),
         )
 
@@ -4659,7 +4714,7 @@ class _BinWriteSteps(Generic[_W]):
 
         ``count`` must be non-negative.
         """
-        return self._parent._add_op(
+        return self._parent.add_operation(
             StringOperation.repeat(self._bin, count, flags=int(flags)),
         )
 
@@ -4679,7 +4734,7 @@ class _BinWriteSteps(Generic[_W]):
         Returns:
             The parent builder, for chaining.
         """
-        return self._parent._add_op(StringOperation.to_string(self._bin))
+        return self._parent.add_operation(StringOperation.to_string(self._bin))
 
     # -- Expression operations ------------------------------------------------
 
@@ -4693,7 +4748,7 @@ class _BinWriteSteps(Generic[_W]):
         parent = self._parent
         flags = ExpReadFlags.EVAL_NO_FAIL if ignore_eval_failure else ExpReadFlags.DEFAULT
         expr = parent._expression_from_ael_string_for_ops(expression)
-        return parent._add_op(ExpOperation.read(self._bin, expr, flags))
+        return parent.add_operation(ExpOperation.read(self._bin, expr, flags))
 
     def insert_from(
         self,
@@ -4750,7 +4805,7 @@ class _BinWriteSteps(Generic[_W]):
             base_flags, ignore_op_failure, ignore_eval_failure, delete_if_null,
         )
         expr = parent._expression_from_ael_string_for_ops(expression)
-        return parent._add_op(ExpOperation.write(self._bin, expr, flags))
+        return parent.add_operation(ExpOperation.write(self._bin, expr, flags))
 
     # -- Map navigation (singular -> CdtWriteBuilder) --------------------------
 

@@ -144,6 +144,9 @@ class _OpCollector:
         self.operations.append(op)
         return self
 
+    add_operation = _add_op
+    _add_modify_op = _add_op
+
 
 def _make_key() -> Key:
     return Key("test", "unit", 1)
@@ -157,6 +160,8 @@ class TestWriteBinBuilderKeywords:
         seg = WriteSegmentBuilder.__new__(WriteSegmentBuilder)
         seg._operations = []
         seg._add_op = collector._add_op
+        seg.add_operation = collector.add_operation
+        seg._add_modify_op = collector._add_modify_op
         wb = WriteBinBuilder(seg, "b")
         return wb, collector
 

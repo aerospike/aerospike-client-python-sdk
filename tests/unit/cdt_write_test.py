@@ -1138,6 +1138,11 @@ class TestStringOpsOnNavigatedBuilders:
     a recorder inside the builder modules to observe the ``ctx`` handed over.
     """
 
+    class _StubOp(tuple):
+        """Tuple-shaped stand-in that still answers the op's retry question."""
+
+        is_idempotent = True
+
     class _Recorder:
         """Stand-in for ``StringOperation`` that records every factory call."""
 
@@ -1147,7 +1152,7 @@ class TestStringOpsOnNavigatedBuilders:
         def __getattr__(self, name):
             def factory(*args, **kwargs):
                 self.calls.append((name, args, kwargs))
-                return ("string-op", name)
+                return TestStringOpsOnNavigatedBuilders._StubOp(("string-op", name))
             return factory
 
     @pytest.fixture

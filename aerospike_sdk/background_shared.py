@@ -57,9 +57,17 @@ def make_background_write_policy(
     durable_delete_command_default: Optional[bool] = None,
     durable_delete_override: Optional[bool] = None,
     records_per_second: Optional[int] = None,
+    retryable: bool = False,
 ) -> WritePolicy:
-    """Build a ``WritePolicy`` for background ``query_operate`` / ``query_execute_udf``."""
-    settings = behavior.get_settings(OpKind.WRITE_NON_RETRYABLE, OpShape.QUERY, namespace_mode)
+    """Build a ``WritePolicy`` for background ``query_operate`` / ``query_execute_udf``.
+
+    *retryable* selects the behavior's retryable write scope; a job whose
+    operations are all idempotent earns it, a UDF job never does.
+    """
+    settings = behavior.get_settings(
+        OpKind.WRITE_RETRYABLE if retryable else OpKind.WRITE_NON_RETRYABLE,
+        OpShape.QUERY, namespace_mode,
+    )
     wp = to_write_policy(settings)
     wp.durable_delete = resolve_durable_delete(
         settings.durable_delete,
