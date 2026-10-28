@@ -15,10 +15,19 @@ you act on the numbers; see the "Known limitations" section of
 """
 
 import asyncio
+from datetime import timedelta
 
 import _env
 from aerospike_sdk import DataSet
-from aerospike_sdk.metrics import CommandType, LatencyType, LatencyUnit, MetricsPolicy, Sampler
+from aerospike_sdk.metrics import (
+    CommandType,
+    LatencyType,
+    LatencyUnit,
+    MetricsExporterType,
+    MetricsPolicy,
+    Sampler,
+)
+from aerospike_sdk.policy.system_settings import MetricsSettings, SystemSettings
 
 
 async def _traffic(cluster, count: int) -> None:
@@ -120,19 +129,19 @@ async def part3_export(cluster) -> None:
                 f"{len(document['nodes'])} node(s), {len(namespaces)} namespace(s)"
             )
             for node in document["nodes_departed"]:
-                print(f"  node left the cluster: {node['address']}:{node['port']}")
+                print(
+                    "  node left the cluster: "
+                    f"{node['node_address']}:{node['node_port']}"
+                )
 
     exporter = PrintingExporter()
     cluster.add_exporter(exporter)
 
-    # The export interval comes from configuration; without a config file it
-    # is 30s, which is too long to demonstrate, so this reads the snapshot the
-    # exporter would have been handed.
     cluster.enable_metrics(
         MetricsPolicy(operational_enabled=True, latency_unit=LatencyUnit.MICROSECONDS)
     )
     await _traffic(cluster, 5)
-    await exporter.export(cluster.metrics_snapshot())
+    await asyncio.sleep(1.1)
 
     cluster.disable_metrics()
     cluster.remove_exporter(exporter)
@@ -140,7 +149,15 @@ async def part3_export(cluster) -> None:
 
 
 async def main() -> None:
-    async with _env.connect().connect() as cluster:
+    definition = _env.connect().with_system_settings(
+        SystemSettings(
+            metrics=MetricsSettings(
+                exporter=MetricsExporterType.CUSTOM,
+                export_interval=timedelta(seconds=1),
+            )
+        )
+    )
+    async with definition.connect() as cluster:
         await part1_collect_and_read(cluster)
         await part2_feature_usage(cluster)
         await part3_export(cluster)

@@ -249,7 +249,7 @@ class TestSyncMetrics:
 
         class Recording:
             def export(self, snapshot):
-                received.append(snapshot)
+                received.append(snapshot.to_canonical_dict())
 
         recording = Recording()
         metrics_cluster.add_exporter(recording)
@@ -257,7 +257,7 @@ class TestSyncMetrics:
             metrics_cluster.enable_metrics(_SHAPE_SAFE)
             metrics_cluster._export_timer._export_once()
             assert len(received) == 1
-            doc = received[0].to_canonical_dict()
+            doc = received[0]
             assert doc["client_type"] == "python-sdk"
             assert doc["nodes_departed"] == []
         finally:

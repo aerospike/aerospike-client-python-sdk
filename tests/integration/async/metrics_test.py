@@ -352,7 +352,7 @@ class TestMetricsExport:
                 self._into = into
 
             async def export(self, snapshot):
-                self._into.append(snapshot)
+                self._into.append(snapshot.to_canonical_dict())
 
         a, b = Recording(first), Recording(second)
         metrics_cluster.add_exporter(a)
@@ -363,7 +363,7 @@ class TestMetricsExport:
             # than waiting for it.
             await metrics_cluster._export_timer._export_once()
             assert len(first) == 1 and len(second) == 1
-            doc = first[0].to_canonical_dict()
+            doc = first[0]
             assert doc["client_type"] == "python-sdk"
             assert doc["nodes_departed"] == []
         finally:

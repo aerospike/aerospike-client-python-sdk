@@ -19,7 +19,7 @@
 # Python exceptions always carry a traceback, and the XDR bit is a
 # connector-level policy override, not a behavior.
 
-version: "1.0.0"
+version: "1.2.0"
 
 # =============================================================================
 # SYSTEM SETTINGS
@@ -59,9 +59,6 @@ system:
       # Suspend repeated failures, then retry by wall-clock delay.
       max_consecutive_failures: 3
       suspend_retry_interval: 60s
-      # Async clients only. true moves exporter coroutines to a dedicated
-      # daemon event loop; leave false for application-loop-bound resources.
-      async_exporter_isolation: false
       exporter: file
       report_dir: ""
       report_size_limit: 10mb

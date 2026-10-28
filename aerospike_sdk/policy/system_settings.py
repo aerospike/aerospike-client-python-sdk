@@ -98,9 +98,9 @@ class MetricsSettings:
     exporters registered with ``add_exporter``) or ``none``. A string in any
     case is accepted and stored as the enum member.
 
-    ``async_exporter_isolation`` is an opt-in for the async client. ``True``
-    runs exporter coroutines on a dedicated daemon thread/event loop instead
-    of the application's loop. It defaults off to preserve loop affinity.
+    ``async_exporter_isolation`` is retained as a compatibility input. Async
+    exporters now always run on a dedicated metrics-owned thread/event loop,
+    so either value has the same runtime behavior.
 
     Example::
 

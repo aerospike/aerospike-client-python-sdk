@@ -61,6 +61,10 @@ from aerospike_sdk.policy.system_settings import (
 
 log = logging.getLogger(SdkLoggers.BEHAVIOR)
 
+SUPPORTED_SCHEMA_VERSIONS = ("1.0.0", "1.2.0")
+METRICS_V3_SCHEMA_VERSION = "1.2.0"
+_SCHEMA_UNCHECKED = object()
+
 # Keys and blocks the loader did not recognize, collected for the duration of one
 # parse. Warning on each is what makes a stale or mistyped config visible at all:
 # the settings it carries simply do not apply, and without a warning the file
@@ -442,7 +446,9 @@ def _parse_section(
     return kwargs
 
 
-def _parse_profile(name: str, profile: object) -> SystemSettings:
+def _parse_profile(
+    name: str, profile: object, schema_version: str,
+) -> SystemSettings:
     """Build a :class:`SystemSettings` from one profile mapping."""
     if not isinstance(profile, Mapping):
         log.warning("SDK config: profile %r is not a mapping; treated as empty", name)
@@ -454,6 +460,24 @@ def _parse_profile(name: str, profile: object) -> SystemSettings:
         key_map = _SECTIONS.get(section_name)
         if key_map is None:
             _record_drop(f"section {section_name!r} in profile {name!r}")
+            continue
+        if section_name == "metrics" and schema_version != METRICS_V3_SCHEMA_VERSION:
+            if isinstance(section, Mapping):
+                # Schema 1.0 used the singular flat key. Every v3 sibling is
+                # ignored visibly so an old-version header cannot misapply it.
+                if "enable" in section:
+                    metrics_kwargs.update(
+                        _parse_section(
+                            f"{name}.metrics", {"enable": section["enable"]},
+                            {"enable": ("enabled", bool)},
+                        )
+                    )
+                for key in section:
+                    if key != "enable":
+                        _record_drop(
+                            f"key {name}.metrics.{key} requires schema "
+                            f"{METRICS_V3_SCHEMA_VERSION}"
+                        )
             continue
         parsed = _parse_section(f"{name}.{section_name}", section, key_map)
         if section_name == "transactions":
@@ -539,8 +563,37 @@ def _load_yaml_doc(text: str) -> Optional[Mapping]:
     return doc
 
 
-def _profiles_from_doc(doc: Mapping) -> Dict[str, SystemSettings]:
+def _schema_version(doc: Mapping) -> Optional[str]:
+    """Return a supported schema version.
+
+    Headerless documents retain the loader's historical behavior and use the
+    newest schema. Shipped operator examples still declare their version.
+    """
+    raw = doc.get("version")
+    if raw is None:
+        return METRICS_V3_SCHEMA_VERSION
+    if not isinstance(raw, str):
+        log.warning("SDK config: schema version must be a string; ignoring document")
+        return None
+    if raw not in SUPPORTED_SCHEMA_VERSIONS:
+        log.warning(
+            "SDK config: unsupported schema version %r; supported versions are %s; "
+            "ignoring document",
+            raw, ", ".join(SUPPORTED_SCHEMA_VERSIONS),
+        )
+        return None
+    return raw
+
+
+def _profiles_from_doc(
+    doc: Mapping, schema_version: object = _SCHEMA_UNCHECKED,
+) -> Dict[str, SystemSettings]:
     """Extract the ``system:`` per-profile settings map from a parsed doc."""
+    if schema_version is _SCHEMA_UNCHECKED:
+        schema_version = _schema_version(doc)
+    if schema_version is None:
+        return {}
+    assert isinstance(schema_version, str)
     system = doc.get("system")
     if system is None:
         log.debug("SDK config: no 'system' section; nothing to apply")
@@ -548,7 +601,10 @@ def _profiles_from_doc(doc: Mapping) -> Dict[str, SystemSettings]:
     if not isinstance(system, Mapping):
         log.warning("SDK config: 'system' is not a mapping; ignored")
         return {}
-    return {str(name): _parse_profile(str(name), profile) for name, profile in system.items()}
+    return {
+        str(name): _parse_profile(str(name), profile, schema_version)
+        for name, profile in system.items()
+    }
 
 
 def parse_sdk_config(text: str) -> Dict[str, SystemSettings]:
@@ -621,8 +677,14 @@ def _parse_behavior_profile(name: str, profile: object) -> Optional[BehaviorSpec
     )
 
 
-def _behaviors_from_doc(doc: Mapping) -> Dict[str, BehaviorSpec]:
+def _behaviors_from_doc(
+    doc: Mapping, schema_version: object = _SCHEMA_UNCHECKED,
+) -> Dict[str, BehaviorSpec]:
     """Extract the ``behaviors:`` spec map from a parsed doc."""
+    if schema_version is _SCHEMA_UNCHECKED:
+        schema_version = _schema_version(doc)
+    if schema_version is None:
+        return {}
     behaviors = doc.get("behaviors")
     if behaviors is None:
         return {}
@@ -873,10 +935,13 @@ def parse_config_bytes(raw: bytes, path: str) -> Optional[LoadedConfig]:
         return None
     if doc is None:
         return LoadedConfig(raw=raw, profiles={}, behaviors={})
+    schema_version = _schema_version(doc)
+    if schema_version is None:
+        return None
     return LoadedConfig(
         raw=raw,
-        profiles=_profiles_from_doc(doc),
-        behaviors=_behaviors_from_doc(doc),
+        profiles=_profiles_from_doc(doc, schema_version),
+        behaviors=_behaviors_from_doc(doc, schema_version),
     )
 
 

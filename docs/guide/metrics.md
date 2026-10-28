@@ -255,6 +255,7 @@ Or from the configuration file, which is the same key the other Aerospike
 clients use:
 
 ```yaml
+version: "1.2.0"
 system:
   DEFAULT:
     metrics:
@@ -295,18 +296,19 @@ I/O and the async client must not block its event loop on it:
 ```python
 from aerospike_sdk.metrics import AsyncMetricsExporter
 
-class JsonExporter:
+class RegistryExporter:
     async def export(self, snapshot):
-        await self._post(snapshot.to_canonical_dict())
+        self.latest = snapshot.to_canonical_dict()
 
-cluster.add_exporter(JsonExporter())
+cluster.add_exporter(RegistryExporter())
 ```
 
 Implement `MetricsExporter` (plain `def export`) for the sync client and
 `AsyncMetricsExporter` (`async def export`) for the async one. Exporters are
-called in registration order with the same snapshot, which is an owned copy —
-keeping it past the call is safe. One exporter raising never silences the
-others: the error is logged and the rest still run. By default, an exporter
+called in registration order with the same snapshot. It is valid for the
+duration of `export`; copy `snapshot.to_canonical_dict()` inside the call if
+the exporter retains data. One exporter raising never silences the others:
+the error is logged and the rest still run. By default, an exporter
 that fails three exports in a row is suspended and retried after 60 seconds.
 Configure those values with `metrics.max_consecutive_failures` and
 `metrics.suspend_retry_interval`. The retry delay is wall-clock time, not a
@@ -317,16 +319,13 @@ default). A timed-out exporter is counted as failed and delivery continues to
 the exporters registered after it. The same exporter is not invoked again
 while its timed-out call is still unwinding; Python cannot forcibly terminate
 arbitrary application code. An async timeout does not cancel the exporter,
-because cancellation cannot stop blocking work already running through
-`asyncio.to_thread()`.
+because the timeout bounds SDK delivery rather than forcibly terminating
+application-owned work.
 
-Async exporters run on the application's event loop by default, preserving
-the loop affinity expected by existing asyncio resources. Set
-`metrics.async_exporter_isolation: true` to run exporter coroutines on a
-dedicated daemon thread and event loop instead. This opt-in protects
-application tasks from a custom exporter that blocks without yielding, but an
-exporter must not use asyncio objects bound to the application loop while the
-switch is enabled.
+Async exporter coroutines run on a dedicated metrics-owned daemon thread and
+event loop, never on the application loop, tend thread, or command path.
+They must not use clients, locks, queues, or other asyncio objects bound to
+the application's event loop.
 
 Disabling metrics and closing the cluster each push one last snapshot, so the
 activity since the previous interval is not lost. It is taken before
@@ -376,16 +375,10 @@ definition = ClusterDefinition(host).with_system_settings(
             export_timeout=timedelta(seconds=10),
             max_consecutive_failures=3,
             suspend_retry_interval=timedelta(seconds=60),
-            # Async clients only: keep custom exporter work off the app loop.
-            async_exporter_isolation=True,
         )
     )
 )
 ```
-
-Leave `async_exporter_isolation` unset or `False` when an async exporter uses
-an `asyncio` client, lock, queue, or other object created on the application's
-event loop.
 
 {meth}`~aerospike_sdk.metrics.MetricsSnapshot.to_canonical_dict` is the payload an
 exporter should serialize: a stable `snake_case` document independent of how
@@ -412,8 +405,8 @@ failures = sum(namespace[k] for k in causes)
 ```
 
 These are server answers. The native layer cannot yet attribute a client-side
-timeout to a namespace, so `client_timeouts` is omitted rather than reported
-as a fabricated zero. See [Known limitations](#known-limitations).
+timeout to a namespace, so the shared `client_timeouts` field remains zero
+until that native count is available. See [Known limitations](#known-limitations).
 
 (writing-metrics-to-files)=
 ### Writing metrics to files
@@ -424,6 +417,7 @@ shippers and tools such as `asloglatency`. It is the default recipient: set a
 directory and the client writes there on every interval.
 
 ```yaml
+version: "1.2.0"
 system:
   DEFAULT:
     metrics:
@@ -432,7 +426,6 @@ system:
       export_timeout: 10s
       max_consecutive_failures: 3
       suspend_retry_interval: 60s
-      async_exporter_isolation: false
       exporter: file
       report_dir: /var/log/aerospike/metrics
       report_size_limit: 10mb
@@ -449,7 +442,7 @@ first line of a file is the header declaring the schema, and each later line
 is one snapshot, positional rather than named:
 
 ```text
-header(5) cluster[cluster_name,client_type,client_version,app_id,labels[],cpu,mem,recover_queue_size,nodes_invalid,command_count,blocking_count,deferred_count,background_count,tran_count,command_retries,nodes[]] labels[name,value] nodes[name,address,port,conns_in_use,conns_in_pool,conns_opened,conns_closed,namespaces[]] namespaces[name,errors,timeouts,key_busy,bytes_in,bytes_out,latency[]] latency(MILLISECONDS,7,1)[type[l1,l2,l3...]]
+header(5) cluster[cluster_name,client_type,client_version,app_id,labels[],cpu,mem,recover_queue_size,nodes_invalid,command_count,command_retries,nodes[]] labels[name,value] nodes[name,address,port,conns_in_use,conns_in_pool,conns_opened,conns_closed,namespaces[]] namespaces[name,errors,timeouts,key_busy,bytes_in,bytes_out,latency[]] latency(MILLISECONDS,7,1)[type[l1,l2,l3...]]
 ```
 
 - `client_type` is `python-sdk`.
@@ -462,16 +455,13 @@ header(5) cluster[cluster_name,client_type,client_version,app_id,labels[],cpu,me
 - `command_count` and `command_retries` are the cluster counters described in
   [Known limitations](#known-limitations). They read 0 unless the operational
   tier is on.
-- `blocking_count`, `deferred_count`, `background_count` and `tran_count` are
-  legacy positional columns. The first three receive the canonical API usage
-  counters; `tran_count` is 0 because transaction is not an approved v1 usage
-  field. Other approved usage counters reach consumers through the canonical
-  snapshot.
-- Nodes that left the cluster since the previous line follow the live ones in
-  the node list, with their final counters.
+- Usage counters remain on the canonical snapshot and structured exporters;
+  they are not added to this positional compatibility file.
+- Nodes that left the cluster since the previous line are written immediately
+  afterward as separate final `node[...]` lines.
 - The legacy file grammar still carries five namespace latency positions.
-  Its `conn` position is zero because revised snapshots place connection
-  acquisition at node scope; write/read/batch/query retain their positions.
+  Its `conn` position is populated from node `conn_latency`;
+  write/read/batch/query retain their namespace positions.
 
 The file can also be written from code: construct the writer and register it
 like any exporter, under `custom` mode. Its first `export` opens the file and
@@ -500,6 +490,7 @@ Everything above can come from the SDK configuration file instead of code, so
 collection can be turned on in a deployment without a rebuild:
 
 ```yaml
+version: "1.2.0"
 system:
   DEFAULT:
     metrics:
@@ -525,9 +516,9 @@ the sampler live inside `metrics.extended.operational` with the tier they
 configure — at the `metrics` root they are reported as unrecognized, since
 there is nothing there for them to shape.
 
-A block that never sets `enabled` leaves collection as it is, so a file that
-only tunes the histogram shape does not switch collection on by itself.
-Changing `enabled` in the file takes effect on reload, without reconnecting.
+A block that never sets `enabled` does not switch collection on by itself. If
+collection is already on, its collection and delivery settings are refreshed
+without reconnecting. Changing `enabled` also takes effect on reload.
 
 While a loaded file sets `metrics.enabled`, the file owns that switch:
 `enable_metrics()` and `disable_metrics()` raise `AerospikeError` with
@@ -546,7 +537,7 @@ current behavior, not bugs in configuration:
 | **Two latency measures** | Per-namespace `latencies` time each network attempt, so a retried command contributes one sample per attempt. Top-level `cluster_latencies` time the whole call, first attempt through the last retry. Node `conn_latency` measures connection acquisition. |
 | **Error counters follow the histograms** | The operational tier is one switch: there is no way to record result codes and retry counters without also recording latency histograms. |
 | **Command count scope** | The cluster `command_count` is counted by this SDK, one per API call while the operational tier is on — data path, background job registration and admin commands alike. It is exact rather than sampled, and counts calls made through this SDK only. The cluster `command_retries` is the per-node retry counters summed and has no such scope caveat — retries happen inside the client core, so it covers all traffic. |
-| **Native fields not yet available** | The Rust layer does not expose delay-queue timeout count, pre-node validation open/TLS/auth failures, namespace-attributed client timeouts, or an authoritative client-wide batch-partial-failure count. These keys are omitted rather than emitted as false zeroes. |
+| **Native fields not yet available** | The Rust layer does not expose delay-queue timeout count, pre-node validation open/TLS/auth failures, namespace-attributed client timeouts, or an authoritative client-wide batch-partial-failure count. The fixed shared snapshot carries these fields as zero until native supplies them. |
 | **Latency unit in the log file** | Older consumers of the line format read latency as milliseconds regardless of the unit the header names. Microsecond buckets are written unchanged and will be misread by those tools. The canonical snapshot is unaffected — it carries `latency_unit`. |
 | **Usage counter scope** | Usage counters are recorded in this SDK, so they cover calls made through this API only, and do not appear in the underlying client's own snapshot. |
 

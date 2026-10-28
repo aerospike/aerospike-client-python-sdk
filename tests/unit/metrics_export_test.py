@@ -110,6 +110,7 @@ _DOC = {
             "node_address": "10.0.0.1",
             "node_port": 3000,
             "connections": {"opened": 4, "closed": 1, "in_use": 1, "in_pool": 2},
+            "conn_latency": {"type": "conn", "bucket_counts": [5, 6]},
             "namespaces": [
                 {
                     "namespace": "test",
@@ -267,6 +268,29 @@ class TestExporterSuspension:
         timer._export_once()
         assert len(flaky.calls) == 3
 
+    def test_busy_cycles_do_not_repeat_a_timeout_failure(self):
+        release = threading.Event()
+
+        class Blocked:
+            def export(self, snapshot):
+                release.wait()
+
+        exporter = Blocked()
+        settings = SimpleNamespace(
+            export_timeout=timedelta(milliseconds=10),
+            max_consecutive_failures=2,
+        )
+        timer = SyncMetricsExportTimer(_StubCluster([exporter]), 3600.0, settings)
+        try:
+            timer._export_once()
+            timer._export_once()
+            timer._export_once()
+            health = timer._state._health[id(exporter)]
+            assert health.failures == 1
+            assert health.suspended is False
+        finally:
+            release.set()
+
 
 class TestNodeCloseTracker:
     """Departure is judged against the live node list, never a snapshot diff."""
@@ -340,8 +364,7 @@ class TestMetricsWriter:
         assert header == (
             "header(5)"
             " cluster[cluster_name,client_type,client_version,app_id,labels[],cpu,mem,"
-            "recover_queue_size,nodes_invalid,command_count,blocking_count,deferred_count,"
-            "background_count,tran_count,command_retries,nodes[]]"
+            "recover_queue_size,nodes_invalid,command_count,command_retries,nodes[]]"
             " labels[name,value]"
             " nodes[name,address,port,conns_in_use,conns_in_pool,conns_opened,conns_closed,"
             "namespaces[]]"
@@ -363,18 +386,24 @@ class TestMetricsWriter:
         line = self._lines(tmp_path, doc)[1].split(" ", 2)[2]
         assert line == (
             "cluster[c1,python-sdk,9.9.9,billing,[[owner,platform]],12.5,1048576,2,1,"
-            "57,40,7,2,0,3,"
+            "57,3,"
             "[[BB9,10.0.0.1,3000,1,2,4,1,"
-            "[test,2,1,0,10,20,[conn[0,0],write[3,0],read[1,2],batch[0,0],query[0,0]]]]]]"
+            "[test,2,1,0,10,20,[conn[5,6],write[3,0],read[1,2],batch[0,0],query[0,0]]]]]]"
         )
 
-    def test_usage_columns_read_zero_when_usage_is_off(self, tmp_path):
-        line = self._lines(tmp_path)[1]
-        assert ",9.9.9,billing,[[owner,platform]],0.0,0,0,0,57,0,0,0,0,3,[" in line
-
-    def test_only_the_api_and_transaction_counters_reach_the_file(self, tmp_path):
-        """The other feature counters stay in the structured snapshot."""
-        text = "\n".join(self._lines(tmp_path, dict(_DOC, usage={"shape_point": 900})))
+    def test_usage_counters_stay_in_the_structured_snapshot(self, tmp_path):
+        """No feature counter adds a field to the positional compatibility file."""
+        text = "\n".join(self._lines(tmp_path, dict(
+            _DOC,
+            usage={
+                "blocking": 901, "deferred": 902, "background": 903,
+                "shape_point": 904,
+            },
+        )))
+        assert "901" not in text
+        assert "902" not in text
+        assert "903" not in text
+        assert "904" not in text
         assert "900" not in text
         assert "feature." not in text
 
@@ -382,15 +411,16 @@ class TestMetricsWriter:
         line = self._lines(tmp_path, dict(_DOC, labels={}))[1]
         assert ",billing,[],0.0," in line
 
-    def test_departed_nodes_follow_the_live_ones_in_the_node_list(self, tmp_path):
+    def test_departed_nodes_are_written_as_final_node_lines(self, tmp_path):
         departed = {
             "node_name": "BB8", "node_address": "10.0.0.9", "node_port": 3000,
             "connections": {"opened": 9, "closed": 9, "in_use": 0, "in_pool": 0},
             "namespaces": [],
         }
         lines = self._lines(tmp_path, dict(_DOC, nodes_departed=[departed]))
-        assert len(lines) == 2, "no separate line per departed node"
-        assert lines[1].endswith(",[BB8,10.0.0.9,3000,0,0,9,9,[]]]")
+        assert len(lines) == 3
+        assert "BB8" not in lines[1]
+        assert re.match(_STAMP + r"node\[BB8,10\.0\.0\.9,3000,0,0,9,9,\[\]\]$", lines[2])
 
     def test_field_names_are_snake_case(self, tmp_path):
         header = self._lines(tmp_path)[0]
@@ -582,22 +612,47 @@ class TestAsyncExportTimer:
 
         class Good:
             async def export(self, snapshot):
-                received.append(snapshot)
+                received.append(snapshot.to_canonical_dict())
 
         class Bad:
             async def export(self, snapshot):
                 failures.append(1)
                 raise RuntimeError("destination is down")
 
-        timer = AsyncMetricsExportTimer(_StubCluster([Bad(), Good()]), 3600.0)
-        with caplog.at_level(logging.WARNING):
-            await timer._export_once()
-        assert len(received) == 1 and len(failures) == 1
-        assert "raised" in caplog.text
+        cluster = _StubCluster([Bad(), Good()])
+        timer = AsyncMetricsExportTimer(cluster, 3600.0)
+        try:
+            with caplog.at_level(logging.WARNING):
+                await timer._export_once()
+            assert len(received) == 1 and len(failures) == 1
+            assert "raised" in caplog.text
+        finally:
+            await cluster._async_metrics_export_worker.close()
+
+    async def test_exporter_cancellation_is_isolated_from_the_scheduler(self, caplog):
+        calls = []
+
+        class Cancelled:
+            async def export(self, snapshot):
+                raise asyncio.CancelledError
+
+        class Good:
+            async def export(self, snapshot):
+                calls.append(1)
+
+        cluster = _StubCluster([Cancelled(), Good()])
+        timer = AsyncMetricsExportTimer(cluster, 3600.0)
+        try:
+            with caplog.at_level(logging.WARNING):
+                await timer._export_once()
+            assert calls == [1]
+            assert "cancelled its invocation" in caplog.text
+        finally:
+            await cluster._async_metrics_export_worker.close()
 
     async def test_a_slow_async_exporter_times_out_and_the_next_runs(self):
-        started = asyncio.Event()
-        release = asyncio.Event()
+        started = threading.Event()
+        release = threading.Event()
 
         class Slow:
             def __init__(self):
@@ -606,7 +661,8 @@ class TestAsyncExportTimer:
             async def export(self, snapshot):
                 self.calls += 1
                 started.set()
-                await release.wait()
+                while not release.is_set():
+                    await asyncio.sleep(0.001)
 
         class Good:
             def __init__(self):
@@ -627,9 +683,9 @@ class TestAsyncExportTimer:
             assert good.calls == 2
         finally:
             release.set()
-            await asyncio.sleep(0)
+            await cluster._async_metrics_export_worker.close()
 
-    async def test_opt_in_runs_exporter_on_a_dedicated_event_loop_thread(self):
+    async def test_exporter_runs_on_a_dedicated_event_loop_thread_by_default(self):
         observed = {}
 
         class Exporter:
@@ -637,16 +693,14 @@ class TestAsyncExportTimer:
                 observed["thread"] = threading.get_ident()
                 observed["loop"] = asyncio.get_running_loop()
 
-        settings = SimpleNamespace(async_exporter_isolation=True)
         cluster = _StubCluster([Exporter()])
-        timer = AsyncMetricsExportTimer(cluster, 3600.0, settings)
-        worker = cluster._async_metrics_export_worker
+        timer = AsyncMetricsExportTimer(cluster, 3600.0)
         try:
             await timer._export_once()
             assert observed["thread"] != threading.get_ident()
             assert observed["loop"] is not asyncio.get_running_loop()
         finally:
-            await worker.close()
+            await cluster._async_metrics_export_worker.close()
 
     async def test_isolated_blocking_exporter_does_not_block_application_loop(self):
         events = []
@@ -657,13 +711,9 @@ class TestAsyncExportTimer:
                 threading.Event().wait(0.1)
                 events.append("export-finish")
 
-        settings = SimpleNamespace(
-            async_exporter_isolation=True,
-            export_timeout=timedelta(milliseconds=20),
-        )
+        settings = SimpleNamespace(export_timeout=timedelta(milliseconds=20))
         cluster = _StubCluster([Blocking()])
         timer = AsyncMetricsExportTimer(cluster, 3600.0, settings)
-        worker = cluster._async_metrics_export_worker
         try:
             delivery = asyncio.create_task(timer._export_once())
             await asyncio.sleep(0.005)
@@ -671,7 +721,7 @@ class TestAsyncExportTimer:
             await delivery
             assert events[:2] == ["export-start", "application-tick"]
         finally:
-            await worker.close()
+            await cluster._async_metrics_export_worker.close()
 
 
 class _AsyncRecordingExporter:
@@ -747,6 +797,7 @@ class TestFinalExport:
         assert cluster.polls == 1 and exporter.calls == 0
         await delivery
         assert exporter.calls == 1
+        await cluster._async_metrics_export_worker.close()
 
     async def test_async_plain_request_stop_pushes_nothing(self):
         exporter = _AsyncRecordingExporter()
@@ -758,10 +809,12 @@ class TestFinalExport:
 
     async def test_async_final_stop_delivers_before_returning(self):
         exporter = _AsyncRecordingExporter()
-        timer = AsyncMetricsExportTimer(_StubCluster([exporter]), 3600.0)
+        cluster = _StubCluster([exporter])
+        timer = AsyncMetricsExportTimer(cluster, 3600.0)
         timer.start()
         await timer.stop(final=True)
         assert exporter.calls == 1
+        await cluster._async_metrics_export_worker.close()
 
     async def test_a_new_timer_waits_for_the_pending_final_push(self):
         exporter = _AsyncRecordingExporter()
@@ -778,3 +831,6 @@ class TestFinalExport:
             assert exporter.calls > 0
         finally:
             await timer.stop()
+            worker = getattr(timer._state.cluster, "_async_metrics_export_worker", None)
+            if worker is not None:
+                await worker.close()

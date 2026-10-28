@@ -184,6 +184,62 @@ class TestParseSdkConfig:
         assert profiles["DEFAULT"].tend_interval is None
 
 
+class TestSchemaVersion:
+    def test_schema_1_2_applies_v3_metrics(self):
+        profiles = parse_sdk_config(
+            'version: "1.2.0"\n'
+            "system:\n  DEFAULT:\n    metrics:\n"
+            "      enabled: true\n      export_interval: 30s\n"
+        )
+        metrics = profiles["DEFAULT"].metrics
+        assert metrics.enabled is True
+        assert metrics.export_interval == timedelta(seconds=30)
+
+    def test_schema_1_0_accepts_legacy_enable_and_ignores_v3_keys(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            profiles = parse_sdk_config(
+                'version: "1.0.0"\n'
+                "system:\n  DEFAULT:\n    metrics:\n"
+                "      enable: true\n      export_interval: 1s\n"
+            )
+        metrics = profiles["DEFAULT"].metrics
+        assert metrics.enabled is True
+        assert metrics.export_interval is None
+        assert "requires schema 1.2.0" in caplog.text
+
+    @pytest.mark.parametrize("version", ['"9.0.0"', "12"])
+    def test_unsupported_or_non_string_schema_ignores_the_document(
+        self, version, caplog,
+    ):
+        with caplog.at_level(logging.WARNING):
+            profiles = parse_sdk_config(
+                f"version: {version}\n"
+                "system:\n  DEFAULT:\n    metrics:\n      enabled: true\n"
+            )
+        assert profiles == {}
+        assert "schema version" in caplog.text
+
+    def test_headerless_documents_keep_the_historical_latest_schema_behavior(self):
+        profiles = parse_sdk_config(
+            "system:\n  DEFAULT:\n    metrics:\n      enabled: true\n"
+        )
+        assert profiles["DEFAULT"].metrics.enabled is True
+
+    def test_fail_soft_file_load_rejects_unsupported_schema_as_a_whole(self):
+        raw = (
+            b'version: "9.0.0"\n'
+            b"system:\n  DEFAULT:\n    metrics:\n      enabled: true\n"
+        )
+        assert parse_config_bytes(raw, "sdk.yaml") is None
+
+    def test_python_object_tags_are_rejected(self):
+        with pytest.raises(ValueError):
+            parse_sdk_config(
+                "version: '1.2.0'\n"
+                "system: !!python/object/apply:builtins.dict []\n"
+            )
+
+
 class TestConnectTimeoutKey:
     """wait_for_connection_to_complete: a connections key, acknowledged elsewhere."""
 

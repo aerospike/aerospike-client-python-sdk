@@ -423,8 +423,8 @@ class MetricsSnapshot:
         Each namespace's ``errors`` is the remainder: failures not already
         counted under ``server_timeouts``, ``key_busy``, ``record_too_big`` or
         ``device_overload``, so summing the five never counts a failure twice.
-        Native fields that are unavailable are omitted rather than fabricated
-        as zero.
+        Shared fields that the native client cannot populate yet remain in the
+        fixed document with value zero; their TODOs mark the native boundary.
 
         ``app_id`` is always populated, so a consumer can group by application
         without a missing-field case: the identity the application set on the
@@ -516,9 +516,22 @@ class MetricsSnapshot:
             "total_nodes": self.total_nodes,
             "recover_queue_size": int(raw.get("recover_queue_size", 0) or 0),
             "invalid_node_count": int(raw.get("nodes_invalid", 0) or 0),
+            # TODO(native): the client snapshot does not report delay-queue
+            # timeouts yet. The field stays 0 until that count exists.
+            "delay_queue_timeout_count": int(raw.get("delay_queue_timeout_count", 0) or 0),
+            # TODO(native): node validation failures are not separated from
+            # later connection errors. These stay 0 until native reports them.
+            "validation_open_failure": int(raw.get("validation_open_failure", 0) or 0),
+            "validation_tls_handshake_failure": int(
+                raw.get("validation_tls_handshake_failure", 0) or 0
+            ),
+            "validation_auth_failure": int(raw.get("validation_auth_failure", 0) or 0),
             "open_connections": int(open_connections or 0),
             "command_count": self.command_count,
             "command_retries": int(aggregated.get("transaction_retry_count", 0) or 0),
+            # TODO(native): no authoritative client-wide partial-batch count
+            # is exposed yet. Keep the shared field stable until it is.
+            "batch_partial_failure": int(raw.get("batch_partial_failure", 0) or 0),
             "cpu_percent": cpu_percent,
             "memory_bytes": memory_bytes,
             "cluster_latencies": cluster_latencies,
@@ -796,6 +809,9 @@ def _namespace_view(
         "key_busy": key_busy,
         "record_too_big": record_too_big,
         "device_overload": device_overload,
+        # TODO(native): a client-side deadline cannot yet be attributed to a
+        # namespace, so this stays 0 instead of a fabricated split of errors.
+        "client_timeouts": 0,
         "bytes_in": bytes_in,
         "bytes_out": bytes_out,
         "latencies": [

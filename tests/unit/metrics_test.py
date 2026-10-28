@@ -14,6 +14,7 @@
 
 import copy
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import List
 
 import time
@@ -21,9 +22,11 @@ import time
 import pytest
 from types import SimpleNamespace
 
+from aerospike_sdk.aio.cluster import Cluster as AsyncCluster
 from aerospike_sdk.cluster_shared import ClusterBase
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 from aerospike_sdk.policy.system_settings import MetricsSettings, SystemSettings
+from aerospike_sdk.sync.cluster import Cluster as SyncCluster
 from aerospike_sdk.metrics import (
     CommandType,
     LatencyType,
@@ -270,6 +273,43 @@ class TestCanonicalSnapshot:
         assert doc["cluster_name"] == "c1"
         assert doc["app_id"] == "billing"
         assert doc["timestamp"].endswith("+00:00")
+
+    def test_shared_document_has_the_fixed_v1_key_sets(self):
+        doc = self._snapshot().to_canonical_dict()
+        assert set(doc) == {
+            "timestamp", "metrics_enabled", "operational_metrics_enabled",
+            "usage_metrics_enabled", "cluster_name", "client_type",
+            "client_version", "app_id", "labels", "total_nodes",
+            "recover_queue_size", "invalid_node_count",
+            "delay_queue_timeout_count", "open_connections", "command_count",
+            "command_retries", "cpu_percent", "memory_bytes",
+            "batch_partial_failure", "cluster_latencies",
+            "validation_open_failure", "validation_tls_handshake_failure",
+            "validation_auth_failure", "nodes", "nodes_departed", "usage",
+            "latency_unit", "latency_columns", "latency_shift",
+        }
+        node = doc["nodes"][0]
+        assert set(node) == {
+            "node_name", "node_address", "node_port", "connections",
+            "conn_latency", "connection_open_failure",
+            "connection_tls_handshake_failure", "connection_auth_failure",
+            "namespaces",
+        }
+        assert set(node["connections"]) == {"in_use", "in_pool", "opened", "closed"}
+        assert set(node["namespaces"][0]) == {
+            "namespace", "errors", "client_timeouts", "server_timeouts",
+            "key_busy", "record_too_big", "device_overload", "bytes_in",
+            "bytes_out", "latencies",
+        }
+
+    def test_native_blocked_shared_fields_are_stable_zero_placeholders(self):
+        doc = self._snapshot().to_canonical_dict()
+        assert doc["delay_queue_timeout_count"] == 0
+        assert doc["batch_partial_failure"] == 0
+        assert doc["validation_open_failure"] == 0
+        assert doc["validation_tls_handshake_failure"] == 0
+        assert doc["validation_auth_failure"] == 0
+        assert doc["nodes"][0]["namespaces"][0]["client_timeouts"] == 0
 
     def test_snapshot_is_immutable_and_copies_python_owned_inputs(self):
         policy = MetricsPolicy(latency_columns=9)
@@ -561,7 +601,7 @@ class TestCanonicalSnapshot:
         assert ns["namespace"] == "test"
         assert ns["errors"] == 3        # the unnamed causes only
         assert ns["server_timeouts"] == 1
-        assert "client_timeouts" not in ns
+        assert ns["client_timeouts"] == 0
         assert ns["key_busy"] == 2
         assert ns["bytes_in"] == 120
         assert ns["bytes_out"] == 80
@@ -627,3 +667,48 @@ class TestConfigFileOwnsTheSwitch:
     def test_no_file_means_no_owner(self):
         """Settings given in code are not re-applied, so they cannot undo the API."""
         ClusterBase._check_metrics_switch_is_free(self._cluster(None, False), "disable_metrics")
+
+
+class TestMetricsDeliveryRefresh:
+    @pytest.mark.parametrize("cluster_type", [SyncCluster, AsyncCluster])
+    def test_delivery_only_refresh_preserves_the_active_collection_policy(
+        self, cluster_type,
+    ):
+        base = MetricsPolicy(
+            operational_enabled=True,
+            latency_columns=17,
+            labels={"environment": "prod"},
+            usage_enabled=True,
+        )
+        applied = []
+        cluster = SimpleNamespace(
+            _metrics_policy=base,
+            metrics_enabled=lambda: True,
+            _enable_metrics=applied.append,
+        )
+
+        cluster_type._apply_metrics_settings(
+            cluster,
+            MetricsSettings(export_interval=timedelta(seconds=5)),
+        )
+
+        assert len(applied) == 1
+        effective = applied[0]
+        assert effective.operational_enabled is True
+        assert effective.latency_columns == 17
+        assert effective.labels == {"environment": "prod"}
+        assert effective.usage_enabled is True
+
+    @pytest.mark.parametrize("cluster_type", [SyncCluster, AsyncCluster])
+    def test_silent_refresh_does_not_enable_collection(self, cluster_type):
+        applied = []
+        cluster = SimpleNamespace(
+            _metrics_policy=MetricsPolicy(),
+            metrics_enabled=lambda: False,
+            _enable_metrics=applied.append,
+        )
+        cluster_type._apply_metrics_settings(
+            cluster,
+            MetricsSettings(export_interval=timedelta(seconds=5)),
+        )
+        assert applied == []

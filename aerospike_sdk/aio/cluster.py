@@ -114,7 +114,7 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
         self._export_timer: Any = None
         # The latest closing push still being delivered, if any.
         self._final_export: Optional[asyncio.Task] = None
-        # Lazily created only for metrics.async_exporter_isolation.
+        # Lazily created on the first async exporter delivery.
         self._async_metrics_export_worker: Any = None
         sdk_client._owner_cluster = weakref.ref(self)
 
@@ -368,10 +368,15 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
     def _apply_metrics_settings(self, metrics: Any) -> None:
         """Turn collection on or off to match configuration-file settings.
 
-        Silent settings leave collection alone, so a file that tunes only the
-        histogram shape does not switch collection on by itself.
+        Silent settings do not switch collection on by themselves. When
+        collection is already on, they still refresh collection policy and
+        delivery controls such as interval, mode and timeout.
         """
-        if metrics is None or metrics.enabled is None:
+        if metrics is None:
+            return
+        if metrics.enabled is None:
+            if self.metrics_enabled():
+                self._enable_metrics(_policy_from_settings(metrics, self._metrics_policy))
             return
         if metrics.enabled:
             self._enable_metrics(_policy_from_settings(metrics))

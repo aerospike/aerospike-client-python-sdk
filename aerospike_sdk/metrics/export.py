@@ -23,12 +23,10 @@ opening and closing whatever it writes to belongs to the exporter and the
 application that constructed it.
 
 There are two exporter protocols because there are two clients. The async
-client awaits :class:`AsyncMetricsExporter`; by default it preserves the
-application event loop, while the opt-in ``async_exporter_isolation`` setting
-uses a dedicated thread/event loop. The sync client calls
-:class:`MetricsExporter` directly through its bounded runner. Exporting is IO
--- a file write, an HTTP post -- so async exporters should remain cooperative
-even when isolation is off.
+client schedules :class:`AsyncMetricsExporter` on a dedicated metrics-owned
+thread/event loop. The sync client calls :class:`MetricsExporter` through its
+bounded metrics runner. Neither surface runs exporter code on the tend thread
+or command path.
 
 Which exporters receive the push is chosen by the ``metrics.exporter``
 setting (:class:`MetricsExporterType`): ``file``, the default, sends it to
@@ -154,10 +152,11 @@ class MetricsExporter(Protocol):
     call runs on the export thread, so a slow exporter delays the next export
     but never a request.
 
-    The snapshot argument is an owned copy: keeping a reference past the call
-    is safe. Resources the exporter writes to are its own to manage -- open
-    them in the constructor or on first call, and close them from application
-    code when done.
+    The snapshot is valid for this call. Copy
+    ``snapshot.to_canonical_dict()`` before returning if data must be retained.
+    Resources the exporter writes to are its own to manage -- open them in the
+    constructor or on first call, and close them from application code when
+    done.
 
     Example::
 
@@ -191,20 +190,17 @@ class MetricsExporter(Protocol):
 class AsyncMetricsExporter(Protocol):
     """Receives metrics snapshots from an asynchronous cluster.
 
-    The same contract as :class:`MetricsExporter` with an awaitable method, so
-    an exporter can use an async HTTP client without blocking the event loop
-    the cluster's own operations run on.
+    The same call-scoped snapshot contract as :class:`MetricsExporter`, with
+    an awaitable method run on the metrics-owned event loop. Do not use
+    asyncio resources bound to the application's event loop.
 
     Example::
 
-        class OtelExporter:
-            def __init__(self, client):
-                self._client = client
-
+        class RegistryExporter:
             async def export(self, snapshot):
-                await self._client.post("/v1/metrics", json=snapshot.to_canonical_dict())
+                self.latest = snapshot.to_canonical_dict()
 
-        cluster.add_exporter(OtelExporter(httpx.AsyncClient()))
+        cluster.add_exporter(RegistryExporter())
 
     See Also:
         :class:`MetricsExporter`: The same contract for the sync client.
@@ -215,15 +211,6 @@ class AsyncMetricsExporter(Protocol):
         """A snapshot was taken, once per export interval."""
         ...
 
-
-# Cluster-line usage columns, in format order, keyed by the usage counter each
-# one reports.
-_USAGE_FILE_COLUMNS = (
-    "blocking",
-    "deferred",
-    "background",
-    "transaction",
-)
 
 # Latency segment order on every namespace, as the format writes it.
 _LATENCY_ORDER = (
@@ -237,8 +224,7 @@ _LATENCY_ORDER = (
 _HEADER_FIELDS = (
     "header(5)"
     " cluster[cluster_name,client_type,client_version,app_id,labels[],cpu,mem,"
-    "recover_queue_size,nodes_invalid,command_count,blocking_count,deferred_count,"
-    "background_count,tran_count,command_retries,nodes[]]"
+    "recover_queue_size,nodes_invalid,command_count,command_retries,nodes[]]"
     " labels[name,value]"
     " nodes[name,address,port,conns_in_use,conns_in_pool,conns_opened,conns_closed,"
     "namespaces[]]"
@@ -253,15 +239,14 @@ class MetricsWriter:
     a header declaring the schema; each export appends one positional
     ``cluster[...]`` line carrying the cluster totals, its labels, and every
     node with its namespaces. A node that left the cluster since the previous
-    export is written once more in that list, with its final counters.
+    export is written once more as a final ``node[...]`` line.
 
-    The first three legacy usage columns carry the canonical snapshot's
-    blocking, deferred and background counters; the legacy transaction column
-    is zero because that identifier is not part of the v1 usage contract.
-    ``command_count`` and ``command_retries``
-    read 0 unless operational metrics are enabled. A namespace's ``errors``
-    excludes the failures counted under ``timeouts`` and ``key_busy``, and
-    ``timeouts`` counts server-reported timeouts.
+    Usage counters and new cluster-only fields remain in structured snapshots;
+    they are intentionally absent from this positional compatibility format.
+    ``command_count`` and ``command_retries`` read 0 unless operational
+    metrics are enabled. A namespace's ``errors`` excludes the failures
+    counted under ``timeouts`` and ``key_busy``, and ``timeouts`` counts
+    server-reported timeouts.
 
     The header names the latency unit, column count and shift. A file only
     ever describes one histogram shape: an export whose shape differs from
@@ -325,6 +310,9 @@ class MetricsWriter:
             os.makedirs(self._dir, exist_ok=True)
             self._open(shape)
         self._write(self._cluster_line(doc))
+        timestamp = _line_time(_parse_timestamp(doc.get("timestamp")))
+        for node in doc.get("nodes_departed") or ():
+            self._write(f"{timestamp} node{self._node_segment(node, int(shape[1] or 0))}")
 
     def close(self) -> None:
         """Close the log file. Exporting again afterwards opens a new one."""
@@ -381,12 +369,10 @@ class MetricsWriter:
         # Positional, and bracketed exactly as existing parsers of this format
         # expect, which is not balanced. Do not "fix" the brackets.
         labels = ",".join(f"[{k},{v}]" for k, v in (doc.get("labels") or {}).items())
-        usage = doc.get("usage") or {}
-        counts = ",".join(str(int(usage.get(key, 0) or 0)) for key in _USAGE_FILE_COLUMNS)
         columns = int(doc.get("latency_columns") or 0)
         nodes = ",".join(
             self._node_segment(node, columns)
-            for node in [*doc.get("nodes", []), *doc.get("nodes_departed", [])]
+            for node in doc.get("nodes", [])
         )
         return (
             f"{_line_time(_parse_timestamp(doc.get('timestamp')))} cluster["
@@ -396,13 +382,14 @@ class MetricsWriter:
             f"{int(doc.get('memory_bytes', 0) or 0)},"
             f"{int(doc.get('recover_queue_size', 0) or 0)},"
             f"{int(doc.get('invalid_node_count', 0) or 0)},"
-            f"{int(doc.get('command_count', 0) or 0)},{counts},"
+            f"{int(doc.get('command_count', 0) or 0)},"
             f"{int(doc.get('command_retries', 0) or 0)},[{nodes}]"
         )
 
     @staticmethod
     def _node_segment(node: Dict[str, Any], columns: int) -> str:
         conns = node.get("connections") or {}
+        conn_latency = (node.get("conn_latency") or {}).get("bucket_counts") or []
         parts = [
             f"[{node.get('node_name', '')},{node.get('node_address', '')},"
             f"{node.get('node_port', '')},"
@@ -419,7 +406,14 @@ class MetricsWriter:
             types = ",".join(
                 "{}[{}]".format(
                     kind.value,
-                    ",".join(str(b) for b in (latency.get(kind.value) or [0] * columns)),
+                    ",".join(
+                        str(b)
+                        for b in (
+                            conn_latency or [0] * columns
+                            if kind is LatencyType.CONN
+                            else latency.get(kind.value) or [0] * columns
+                        )
+                    ),
                 )
                 for kind in _LATENCY_ORDER
             )
@@ -502,6 +496,10 @@ class _ExportCancelled(Exception):
     """The client is stopping and no longer waits for this invocation."""
 
 
+class _ExportBusy(Exception):
+    """The prior timed-out invocation still owns this exporter's runner."""
+
+
 class _SyncExporterRunner:
     """Run one sync exporter at a time on daemon threads with a bounded wait."""
 
@@ -525,7 +523,7 @@ class _SyncExporterRunner:
         if active is not None:
             done, _ = active
             if not done.is_set():
-                raise TimeoutError("previous export is still running")
+                raise _ExportBusy("previous export is still running")
             self._active = None
 
         done = threading.Event()
@@ -567,7 +565,7 @@ def _consume_async_result(task: Any) -> None:
 
 
 class _AsyncExporterWorker:
-    """Dedicated daemon event loop for opt-in async exporter isolation."""
+    """Dedicated daemon event loop for async metrics exporter delivery."""
 
     def __init__(self) -> None:
         self._ready = threading.Event()
@@ -640,7 +638,7 @@ class _AsyncExporterRunner:
         active = self._active
         if active is not None:
             if not active.done():
-                raise TimeoutError("previous export is still running")
+                raise _ExportBusy("previous export is still running")
             _consume_async_result(active)
             self._active = None
 
@@ -668,7 +666,11 @@ class _AsyncExporterRunner:
                 waiting.add_done_callback(_consume_async_result)
             raise TimeoutError(f"export exceeded {timeout:g}s")
         self._active = None
-        submitted.result()
+        if waiting.cancelled():
+            # Cancellation raised by exporter code is that exporter's failure,
+            # not a request to cancel the SDK scheduler.
+            raise RuntimeError("metrics exporter cancelled its invocation")
+        waiting.result()
 
 
 class _MetricsExportTimer:
@@ -792,8 +794,8 @@ class AsyncMetricsExportTimer:
     """Pushes snapshots to async exporters on the configured event loop.
 
     Scheduling and snapshotting run as an application-loop ``asyncio.Task``.
-    Exporter coroutines run there by default, or on a dedicated daemon
-    thread/event loop when ``metrics.async_exporter_isolation`` is enabled.
+    Exporter coroutines run on a dedicated daemon thread/event loop owned by
+    the metrics subsystem.
 
     ``after`` is a final push still in flight from the timer this one
     replaces; the first export waits for it, so an exporter never sees two
@@ -816,13 +818,16 @@ class AsyncMetricsExportTimer:
             runners = {}
             setattr(cluster, "_async_metrics_export_runners", runners)
         self._runners: Dict[int, _AsyncExporterRunner] = runners
-        self._worker: Optional[_AsyncExporterWorker] = None
-        if bool(getattr(settings, "async_exporter_isolation", False)):
-            worker = getattr(cluster, "_async_metrics_export_worker", None)
-            if worker is None:
-                worker = _AsyncExporterWorker()
-                setattr(cluster, "_async_metrics_export_worker", worker)
-            self._worker = worker
+        self._worker: Optional[_AsyncExporterWorker] = getattr(
+            cluster, "_async_metrics_export_worker", None,
+        )
+
+    def _delivery_worker(self) -> _AsyncExporterWorker:
+        """Return the cluster-owned metrics loop, creating it on first export."""
+        if self._worker is None:
+            self._worker = _AsyncExporterWorker()
+            setattr(self._state.cluster, "_async_metrics_export_worker", self._worker)
+        return self._worker
 
     def start(self) -> None:
         """Start the export task; requires a running event loop."""
@@ -855,8 +860,12 @@ class AsyncMetricsExportTimer:
             try:
                 runner = self._runners.setdefault(id(exporter), _AsyncExporterRunner())
                 await runner.invoke(
-                    exporter, snapshot, state.export_timeout, self._worker,
+                    exporter, snapshot, state.export_timeout, self._delivery_worker(),
                 )
+            except _ExportBusy:
+                # One timeout is one failed invocation. Later cycles skip the
+                # still-running call without inflating its failure count.
+                succeeded = False
             except Exception:
                 succeeded = False
                 state.record_failure(exporter)
@@ -965,6 +974,10 @@ class SyncMetricsExportTimer:
             except _ExportCancelled:
                 succeeded = False
                 break
+            except _ExportBusy:
+                # The original timeout already counted as the invocation's
+                # failure; do not suspend it merely because it is still busy.
+                succeeded = False
             except Exception:
                 succeeded = False
                 state.record_failure(exporter)
