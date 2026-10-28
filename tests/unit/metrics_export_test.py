@@ -848,8 +848,11 @@ class TestFinalExport:
                 await asyncio.sleep(0)
             assert exporter.calls == 0
             pending.set_result(None)
-            for _ in range(5):
-                await asyncio.sleep(0)
+            # Delivery crosses to the metrics-owned loop, so wait on real time.
+            for _ in range(200):
+                if exporter.calls:
+                    break
+                await asyncio.sleep(0.005)
             assert exporter.calls > 0
         finally:
             await timer.stop()

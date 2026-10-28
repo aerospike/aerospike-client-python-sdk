@@ -16,6 +16,7 @@ import asyncio
 import dataclasses
 import os
 import re
+import threading
 from datetime import timedelta
 
 import pytest
@@ -573,10 +574,10 @@ class TestMetricsExport:
         assert re.match(stamp + r"header\(5\) ", header)
         assert "latency(MICROSECONDS,24,1)[" in header
         # name, type, version, app_id, labels, cpu, mem, recover queue,
-        # invalid nodes, command count, four usage counts, retries, nodes.
+        # invalid nodes, command count, retries, nodes.
         assert re.match(
             stamp + r"cluster\[[^,]*,python-sdk,[^,]+,[^,]+,\[(\[[^\]]*\],?)*\],"
-            r"[\d.]+,\d+,\d+,\d+,[1-9]\d*,\d+,\d+,\d+,\d+,\d+,\[\[",
+            r"[\d.]+,\d+,\d+,\d+,[1-9]\d*,\d+,\[\[",
             cluster_line,
         ), cluster_line
         namespace = re.search(
@@ -693,7 +694,9 @@ class TestFinalExport:
     async def test_enable_waits_for_a_pending_final_push(
         self, aerospike_host, make_cluster_definition,
     ):
-        release = asyncio.Event()
+        # The exporter runs on the metrics-owned loop, so the gate must not be
+        # an asyncio object bound to the test's loop.
+        release = threading.Event()
         calls = active = peak = 0
 
         class Gated:
@@ -703,7 +706,8 @@ class TestFinalExport:
                 active += 1
                 peak = max(peak, active)
                 try:
-                    await release.wait()
+                    while not release.is_set():
+                        await asyncio.sleep(0.005)
                 finally:
                     active -= 1
 
