@@ -15,10 +15,9 @@
 
 """Routing capability cache shared by async and sync clients.
 
-Field ``43`` (server-compiled AEL) and field ``44`` (query selection) gates are
-derived from the node list and cached on the client for builder hot paths. Mixed
-into ``Client`` and
-``SyncClient``.
+Field ``43`` (server-compiled AEL), field ``44`` (query selection) and
+multi-record transaction gates are derived from the node list and cached on the
+client for builder hot paths. Mixed into ``Client`` and ``SyncClient``.
 
 The cache is warmed at connect and re-derived once a tend interval has elapsed,
 so a node joining with an older version closes the gates and the client reports
@@ -31,7 +30,7 @@ walk, not a round trip, so it runs inline on both runtimes. See
 Not every client can read node versions: the ``current_thread_runtime`` proxy has
 no node-listing surface, so the cluster version there is *undeterminable* rather
 than old. See :meth:`RoutingCapabilitiesMixin._apply_undeterminable_routing_capabilities`
-for how the two gates resolve in that case.
+for how the gates resolve in that case.
 """
 
 from __future__ import annotations
@@ -64,9 +63,9 @@ class _RoutingCapabilitiesClient(Protocol):
     _sdk_settings: SystemSettings
     _cached_supports_query_selection: Optional[bool]
     _cached_supports_server_compiled_ael: Optional[bool]
+    _cached_supports_mrt: Optional[bool]
     _routing_capability_stamp: Optional[float]
     _routing_capability_ttl: Optional[Tuple[Any, float]]
-    _supports_mrt_cache: Optional[bool]
 
     # Declared so the mixin's own ``self``-annotated methods may call each other.
     def _client_can_list_nodes(self) -> bool: ...
@@ -79,18 +78,19 @@ class _RoutingCapabilitiesClient(Protocol):
 
 
 class RoutingCapabilitiesMixin:
-    """Tend-interval-refreshed cache for field ``43`` / ``44`` routing gates."""
+    """Tend-interval-refreshed cache for the field ``43`` / ``44`` / MRT gates."""
 
     _cached_supports_query_selection: Optional[bool]
     _cached_supports_server_compiled_ael: Optional[bool]
+    _cached_supports_mrt: Optional[bool]
     _routing_capability_stamp: Optional[float]
     _routing_capability_ttl: Optional[Tuple[Any, float]]
-    _supports_mrt_cache: Optional[bool]
 
     def _init_routing_capability_cache(self) -> None:
         """Initialize routing caches; call from client ``__init__``."""
         self._cached_supports_query_selection = None
         self._cached_supports_server_compiled_ael = None
+        self._cached_supports_mrt = None
         self._routing_capability_stamp = None
         self._routing_capability_ttl = None
 
@@ -98,6 +98,7 @@ class RoutingCapabilitiesMixin:
         """Drop routing caches; call from client close paths."""
         self._cached_supports_query_selection = None
         self._cached_supports_server_compiled_ael = None
+        self._cached_supports_mrt = None
         self._routing_capability_stamp = None
         self._routing_capability_ttl = None
 
@@ -132,15 +133,13 @@ class RoutingCapabilitiesMixin:
         node below the MRT server version makes the answer ``False``. A
         client that cannot list nodes (the ``current_thread_runtime`` proxy)
         reports ``False``, so implicit batch-write transactions stay off
-        there. Cached for the client's lifetime; the client clears it on
-        close.
+        there. Tracks the node list within one tend interval, like the
+        other gates, so a node joining or leaving moves the answer without
+        a reconnect. Callers evaluate it after the implicit-transaction
+        precheck, so the stale check runs only for batches that would wrap.
         """
-        if self._supports_mrt_cache is None:
-            versions = self._cluster_versions()
-            self._supports_mrt_cache = bool(versions) and all(
-                version.supports_mrt() for version in versions
-            )
-        return self._supports_mrt_cache
+        self._refresh_routing_capabilities_if_stale()
+        return bool(self._cached_supports_mrt)
 
     def _apply_routing_capabilities_from_versions(
         self: _RoutingCapabilitiesClient,
@@ -150,20 +149,24 @@ class RoutingCapabilitiesMixin:
             versions,
         )
         self._cached_supports_server_compiled_ael = capabilities.supports_ael(versions)
+        self._cached_supports_mrt = capabilities.supports_mrt(versions)
 
     def _apply_undeterminable_routing_capabilities(
         self: _RoutingCapabilitiesClient,
     ) -> None:
-        """Resolve both gates for a client that cannot read node versions.
+        """Resolve the gates for a client that cannot read node versions.
 
-        The two gates diverge deliberately. Field ``43`` is the only encoding
+        The gates diverge deliberately. Field ``43`` is the only encoding
         left for string AEL, so it stays open and a cluster below 8.2.0 rejects
         the filter itself — pre-failing here would reject string AEL against a
         capable cluster. Field ``44`` has a working field-``43`` execute path to
-        fall back on, so an unverifiable cluster keeps it closed.
+        fall back on, so an unverifiable cluster keeps it closed. The MRT gate
+        stays closed too: a plain batch is the safe fallback, while a
+        transaction an unverified node cannot serve fails the whole batch.
         """
         self._cached_supports_query_selection = False
         self._cached_supports_server_compiled_ael = True
+        self._cached_supports_mrt = False
 
     def _routing_capability_ttl_seconds(self: _RoutingCapabilitiesClient) -> float:
         """How long a derived gate stays trusted: one PNC tend interval.
@@ -189,7 +192,7 @@ class RoutingCapabilitiesMixin:
         return ttl
 
     def _resolve_routing_capabilities(self: _RoutingCapabilitiesClient) -> None:
-        """Derive both gates from the current node list."""
+        """Derive the gates from the current node list."""
         if self._client_can_list_nodes():
             self._apply_routing_capabilities_from_versions(self._cluster_versions())
         else:
@@ -215,7 +218,7 @@ class RoutingCapabilitiesMixin:
             log.debug("Routing capability refresh failed: %s", exc, exc_info=True)
 
     def _warm_routing_capabilities(self: _RoutingCapabilitiesClient) -> None:
-        """Resolve both gates at connect so the first operation pays nothing."""
+        """Resolve the gates at connect so the first operation pays nothing."""
         if not self._connected or self._client is None:
             return
         self._resolve_routing_capabilities()
