@@ -163,7 +163,6 @@ _METRICS_KEYS: _KeyMap = {
     "export_timeout": ("export_timeout", "positive_duration"),
     "max_consecutive_failures": ("max_consecutive_failures", "positive_int"),
     "suspend_retry_interval": ("suspend_retry_interval", "duration"),
-    "async_exporter_isolation": ("async_exporter_isolation", bool),
     "exporter": ("exporter", "exporter"),
     "report_dir": ("report_dir", str),
     "report_size_limit": ("report_size_limit", "report_size"),

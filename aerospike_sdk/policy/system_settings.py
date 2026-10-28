@@ -98,10 +98,6 @@ class MetricsSettings:
     exporters registered with ``add_exporter``) or ``none``. A string in any
     case is accepted and stored as the enum member.
 
-    ``async_exporter_isolation`` is retained as a compatibility input. Async
-    exporters now always run on a dedicated metrics-owned thread/event loop,
-    so either value has the same runtime behavior.
-
     Example::
 
         # system:
@@ -136,7 +132,6 @@ class MetricsSettings:
     export_timeout: Optional[timedelta] = None
     max_consecutive_failures: Optional[int] = None
     suspend_retry_interval: Optional[timedelta] = None
-    async_exporter_isolation: Optional[bool] = None
     exporter: Optional[MetricsExporterType] = None
     report_dir: Optional[str] = None
     report_size_limit: Optional[int] = None

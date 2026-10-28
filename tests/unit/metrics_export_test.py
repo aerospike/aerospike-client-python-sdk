@@ -816,6 +816,28 @@ class TestFinalExport:
         assert exporter.calls == 1
         await cluster._async_metrics_export_worker.close()
 
+    @pytest.mark.parametrize("via_request_stop", [False, True])
+    async def test_async_final_export_runs_on_the_dedicated_loop(self, via_request_stop):
+        observed = {}
+
+        class Exporter:
+            async def export(self, snapshot):
+                observed["thread"] = threading.get_ident()
+                observed["loop"] = asyncio.get_running_loop()
+
+        cluster = _StubCluster([Exporter()])
+        timer = AsyncMetricsExportTimer(cluster, 3600.0)
+        timer.start()
+        try:
+            if via_request_stop:
+                await timer.request_stop(final=True)
+            else:
+                await timer.stop(final=True)
+            assert observed["thread"] != threading.get_ident()
+            assert observed["loop"] is not asyncio.get_running_loop()
+        finally:
+            await cluster._async_metrics_export_worker.close()
+
     async def test_a_new_timer_waits_for_the_pending_final_push(self):
         exporter = _AsyncRecordingExporter()
         pending = asyncio.get_running_loop().create_future()

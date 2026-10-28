@@ -633,7 +633,7 @@ class _AsyncExporterRunner:
         exporter: Any,
         snapshot: Any,
         timeout: float,
-        worker: Optional[_AsyncExporterWorker] = None,
+        worker: _AsyncExporterWorker,
     ) -> None:
         active = self._active
         if active is not None:
@@ -642,28 +642,18 @@ class _AsyncExporterRunner:
             _consume_async_result(active)
             self._active = None
 
-        submitted = (
-            asyncio.create_task(exporter.export(snapshot))
-            if worker is None
-            else worker.submit(exporter.export(snapshot))
-        )
+        submitted = worker.submit(exporter.export(snapshot))
         self._active = submitted
-        waiting = (
-            submitted
-            if worker is None
-            else asyncio.wrap_future(submitted)
-        )
+        waiting = asyncio.wrap_future(submitted)
         try:
             done, _ = await asyncio.wait({waiting}, timeout=timeout)
         except asyncio.CancelledError:
             submitted.add_done_callback(_consume_async_result)
-            if waiting is not submitted:
-                waiting.add_done_callback(_consume_async_result)
+            waiting.add_done_callback(_consume_async_result)
             raise
         if not done:
             submitted.add_done_callback(_consume_async_result)
-            if waiting is not submitted:
-                waiting.add_done_callback(_consume_async_result)
+            waiting.add_done_callback(_consume_async_result)
             raise TimeoutError(f"export exceeded {timeout:g}s")
         self._active = None
         if waiting.cancelled():

@@ -619,7 +619,6 @@ system:
       enabled: true
       max_consecutive_failures: 5
       suspend_retry_interval: 45s
-      async_exporter_isolation: true
       labels:
         owner: platform-team
       extended:
@@ -638,7 +637,6 @@ system:
         assert m.enabled is True
         assert m.max_consecutive_failures == 5
         assert m.suspend_retry_interval == timedelta(seconds=45)
-        assert m.async_exporter_isolation is True
         assert m.operational_enabled is True
         assert m.latency_unit == "microseconds"
         assert m.latency_columns == 18
