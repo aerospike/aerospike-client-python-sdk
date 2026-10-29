@@ -151,11 +151,6 @@ class SyncClient(RoutingCapabilitiesMixin):
         # export timer and the usage gate are all owned up there.
         self._owner_cluster: Optional[Callable[[], Any]] = None
         self._sdk_config_monitor: Optional[SyncSdkConfigMonitor] = None
-        # Cluster-wide MRT capability (all nodes >= the MRT server version),
-        # resolved lazily on the first implicit-transaction gate check and
-        # cached for the client's lifetime (cleared on close, like the
-        # namespace-mode cache).
-        self._supports_mrt_cache: Optional[bool] = None
 
     def _apply_sdk_settings(self, settings: SystemSettings) -> None:
         """Adopt reloaded settings, applying the ones that act on a live client.
@@ -234,7 +229,6 @@ class SyncClient(RoutingCapabilitiesMixin):
             log.info("Client closed")
         self._clear_routing_capability_cache()
         self._namespace_mode_cache.clear()
-        self._supports_mrt_cache = None
 
     def __enter__(self) -> SyncClient:
         self.connect()

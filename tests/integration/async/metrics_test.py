@@ -52,6 +52,34 @@ async def metrics_cluster(aerospike_host, make_cluster_definition):
         yield c
 
 
+@pytest.fixture(scope="module")
+def multi_node_seed(request, aerospike_host, make_cluster_definition):
+    """The first of the AP and SC seeds whose cluster has two or more nodes.
+
+    Returns ``(seed, is_ap)``. The AP cluster is preferred since it needs no
+    login. The SC seed is only resolved when the AP cluster is a single node, so
+    an absent SC cluster cannot skip a run the AP cluster could have covered.
+    Sync because resolving the SC seed probes with a blocking client, which
+    cannot run inside the event loop.
+    """
+    with make_cluster_definition(aerospike_host, sync=True).connect() as ap:
+        if len(ap.node_names()) >= 2:
+            return aerospike_host, True
+    return request.getfixturevalue("aerospike_host_sc"), False
+
+
+@pytest.fixture(scope="module")
+async def multi_node_metrics_cluster(multi_node_seed, metrics_cluster, make_cluster_definition):
+    """Metrics cluster on :func:`multi_node_seed`; reuses the AP cluster when it qualifies."""
+    seed, is_ap = multi_node_seed
+    if is_ap:
+        yield metrics_cluster
+        return
+    definition = make_cluster_definition(seed, auth=True).with_system_settings(_CUSTOM_EXPORT)
+    async with definition.connect() as c:
+        yield c
+
+
 # The core builds node metrics with its default histogram shape
 # (microseconds / 24 columns); enabling with the same shape keeps every part of
 # the snapshot populated, since a shape change resets the accumulated counts.
@@ -426,7 +454,7 @@ class TestMetricsExport:
         assert node.detailed_metric(general_namespace(), CommandType.GET) is not None
         metrics_cluster.disable_metrics()
 
-    async def test_canonical_snapshot_across_multiple_nodes(self, metrics_cluster):
+    async def test_canonical_snapshot_across_multiple_nodes(self, multi_node_metrics_cluster):
         """Per-node structure holds when there is more than one node.
 
         Single-node coverage cannot catch a per-node view that accidentally
@@ -434,15 +462,15 @@ class TestMetricsExport:
         every such bug looks correct with one node in the list. Skips rather
         than passes vacuously when the cluster is single-node.
         """
-        metrics_cluster.enable_metrics(_SHAPE_SAFE)
-        session = metrics_cluster.create_session()
+        multi_node_metrics_cluster.enable_metrics(_SHAPE_SAFE)
+        session = multi_node_metrics_cluster.create_session()
         ds = DataSet.of(general_namespace(), "multi_node")
         # Enough keys to spread across partitions, so every node does work.
         for i in range(400):
             await session.upsert(ds.id(i)).put({"n": i}).execute()
             await (await session.query(ds.id(i)).execute()).first()
 
-        document = metrics_cluster.metrics_snapshot().to_canonical_dict()
+        document = multi_node_metrics_cluster.metrics_snapshot().to_canonical_dict()
         nodes = document["nodes"]
         if len(nodes) < 2:
             pytest.skip(f"cluster has {len(nodes)} node(s); needs 2+")
@@ -476,7 +504,7 @@ class TestMetricsExport:
         )
 
         assert document["total_nodes"] == len(nodes)
-        metrics_cluster.disable_metrics()
+        multi_node_metrics_cluster.disable_metrics()
 
     async def test_node_departure_reaches_nodes_departed(self, metrics_cluster):
         """A host the cluster no longer lists appears in ``nodes_departed`` once.

@@ -451,7 +451,7 @@ class Session(
                 return
             policy = to_write_policy(
                 self._behavior.get_settings(
-                    OpKind.WRITE_NON_RETRYABLE, OpShape.POINT))
+                    OpKind.WRITE_RETRYABLE, OpShape.POINT))
             policy.txn = self._txn
             await self._pnc_client.put(key, bins, policy=policy)
         except (PncServerError, PncAerospikeError) as e:
@@ -566,7 +566,7 @@ class Session(
             else:
                 policy = to_write_policy(
                     self._behavior.get_settings(
-                        OpKind.WRITE_NON_RETRYABLE, OpShape.POINT))
+                        OpKind.WRITE_RETRYABLE, OpShape.POINT))
                 policy.txn = self._txn
                 slots, failures = await self._pnc_client._submit_many_write(
                     keys, bins, policy=policy)
@@ -697,6 +697,8 @@ class Session(
             namespace_mode_resolver=self._resolve_namespace_mode,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
             sdk_client=self._client,
+            cached_write_policy_nr=self._cached_write_policy_nr,
+            cached_write_policy_nr_sc=self._cached_write_policy_nr_sc,
         )
         target: Union[Key, List[Key]] = all_keys[0] if len(all_keys) == 1 else all_keys
         return qb._start_write_segment(op_type, target)
@@ -716,6 +718,8 @@ class Session(
             namespace_mode_resolver=self._resolve_namespace_mode,
             namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
             sdk_client=self._client,
+            cached_write_policy_nr=self._cached_write_policy_nr,
+            cached_write_policy_nr_sc=self._cached_write_policy_nr_sc,
         )
         return DataSetWriteBuilder(qb, op_type, dataset)
 
@@ -740,6 +744,8 @@ class Session(
             self._cached_write_policy_sc,
             self._cached_read_policy_sc,
             self._client,
+            self._cached_write_policy_nr,
+            self._cached_write_policy_nr_sc,
         )
 
     # -- Read entry point -----------------------------------------------------

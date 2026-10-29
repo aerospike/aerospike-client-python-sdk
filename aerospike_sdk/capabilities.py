@@ -63,3 +63,8 @@ def supports_string_operations(versions: List[Any]) -> bool:
 def supports_query_selection(versions: List[Any]) -> bool:
     """Whether every node supports server-led index selection (field ``44``)."""
     return bool(versions) and all(v.supports_query_selection() for v in versions)
+
+
+def supports_mrt(versions: List[Any]) -> bool:
+    """Whether every node supports multi-record transactions."""
+    return bool(versions) and all(v.supports_mrt() for v in versions)

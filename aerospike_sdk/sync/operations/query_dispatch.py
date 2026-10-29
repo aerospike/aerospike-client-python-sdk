@@ -98,6 +98,7 @@ class _BlockingQueryDispatch:
         if self._namespace_mode == Mode.SC:
             self._base_read_policy = self._base_read_policy_sc
             self._base_write_policy = self._base_write_policy_sc
+            self._base_write_policy_nr = self._base_write_policy_nr_sc
             self._base_read_operate_policy = self._base_read_operate_policy_sc
 
     def _ensure_batch_namespace_modes_blocking(self) -> None:
@@ -132,7 +133,7 @@ class _BlockingQueryDispatch:
         fn = spec.udf_function
         if pkg is None or fn is None:
             raise ValueError("UDF spec missing package or function name")
-        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        batch_policy = self._batch_write_policy_for((spec,))
         if self._spec_modes_mixed(spec):
             # One UDF policy per call and no per-row UDF op in the mixed
             # API — group keys by mode, apply per group, merge back into
@@ -182,7 +183,7 @@ class _BlockingQueryDispatch:
     ) -> List[RecordResult]:
         """Sync counterpart of :meth:`_execute_batch_touch` — uses
         ``batch_operate_blocking`` with a single touch op per key."""
-        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        batch_policy = self._batch_write_policy_for((spec,))
         bwp = self._make_batch_write_policy(spec)
         touch_ops = [Operation.touch()]
         ops_per_key = [touch_ops] * len(spec.keys)
@@ -361,14 +362,15 @@ class _BlockingQueryDispatch:
             #  - no session-cached base policy (a transaction nulls it), or
             #  - record-delete op present (applies_dd True; needs the spec's
             #    effective_dd resolution inside _make_write_policy).
-            if self._base_write_policy is not None and not spec.contains_record_delete_op:
+            base = self._base_write_policy if spec.retryable else self._base_write_policy_nr
+            if base is not None and not spec.contains_record_delete_op:
                 rea = _OP_TYPE_TO_REA.get(op_type)
                 exp = _to_expiration(spec.ttl_seconds) if spec.ttl_seconds is not None else None
                 try:
                     record = self._client.operate_blocking(
                         key,
                         spec.operations,
-                        policy=self._base_write_policy,
+                        policy=base,
                         record_exists_action=rea,
                         expiration=exp,
                         generation=spec.generation,
@@ -515,7 +517,7 @@ class _BlockingQueryDispatch:
         handler: Optional[ErrorHandler],
     ) -> List[RecordResult]:
         """Fold *specs* into one mixed ``batch_blocking`` call."""
-        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        batch_policy = self._batch_write_policy_for(specs)
         all_ops: list = []
         all_keys: List[Key] = []
         row_op_types: List[Optional[str]] = []
@@ -616,7 +618,7 @@ class _BlockingQueryDispatch:
         mixed-batch API so each row carries a policy scoped to its own
         namespace mode (the single-policy blocking entries cannot).
         """
-        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        batch_policy = self._batch_write_policy_for((spec,))
         all_ops = self._spec_to_batch_ops(spec)
         try:
             batch_records = self._client.batch_blocking(all_ops, batch_policy=batch_policy)
@@ -633,7 +635,7 @@ class _BlockingQueryDispatch:
         if spec.contains_record_delete_op and self._spec_modes_mixed(spec):
             return self._execute_spec_mixed_mode_batch_blocking(
                 spec, disp, handler, op_type=spec.op_type)
-        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        batch_policy = self._batch_write_policy_for((spec,))
         bwp = self._make_batch_write_policy(spec)
         ops_per_key = [spec.operations] * len(spec.keys)
         try:
@@ -681,7 +683,7 @@ class _BlockingQueryDispatch:
         if self._spec_modes_mixed(spec):
             return self._execute_spec_mixed_mode_batch_blocking(
                 spec, disp, handler, op_type="delete")
-        batch_policy = self._batch_policy_for(OpKind.WRITE_NON_RETRYABLE, OpShape.BATCH)
+        batch_policy = self._batch_write_policy_for((spec,))
         bdp = self._make_batch_delete_policy(spec)
         try:
             if self._implicit_txn_gate_blocking(spec.keys):

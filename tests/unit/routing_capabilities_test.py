@@ -26,15 +26,25 @@ from aerospike_sdk.routing_capabilities_shared import (
 
 
 class _FakeVersion:
-    def __init__(self, *, ael: bool = True, query_selection: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        ael: bool = True,
+        query_selection: bool = True,
+        mrt: bool = True,
+    ) -> None:
         self._ael = ael
         self._query_selection = query_selection
+        self._mrt = mrt
 
     def supports_server_compiled_ael(self) -> bool:
         return self._ael
 
     def supports_query_selection(self) -> bool:
         return self._query_selection
+
+    def supports_mrt(self) -> bool:
+        return self._mrt
 
 
 class _FakeNode:
@@ -272,6 +282,79 @@ class TestTendIntervalRefresh:
         for t in threads:
             t.join()
         assert results == [7.0] * n
+
+
+class TestTransactionGate:
+    """The MRT gate rides the same tend-interval cache as the field gates.
+
+    A node list that is empty or mixed-version at the first check must not
+    fix the answer for the client's lifetime.
+    """
+
+    def test_capable_nodes_open_the_gate_at_warm(self):
+        client = _Client(_FakePncClient(_FakeVersion(), _FakeVersion()))
+        client._warm_routing_capabilities()
+        assert client._supports_mrt() is True
+
+    def test_a_pre_transaction_node_joining_closes_the_gate(self, clock):
+        pnc = _FakePncClient(_FakeVersion())
+        client = _Client(pnc, tend_interval=timedelta(seconds=1))
+        client._warm_routing_capabilities()
+        assert client._supports_mrt() is True
+
+        pnc.join(_FakeVersion(mrt=False))
+        clock.advance(1.0)
+
+        assert client._supports_mrt() is False
+
+    def test_the_gate_reopens_when_that_node_leaves(self, clock):
+        pnc = _FakePncClient(_FakeVersion(), _FakeVersion(mrt=False))
+        client = _Client(pnc, tend_interval=timedelta(seconds=1))
+        client._warm_routing_capabilities()
+        assert client._supports_mrt() is False
+
+        pnc.leave()
+        clock.advance(1.0)
+
+        assert client._supports_mrt() is True
+
+    def test_an_empty_node_list_at_warm_does_not_latch_closed(self, clock):
+        pnc = _FakePncClient()
+        client = _Client(pnc, tend_interval=timedelta(seconds=1))
+        client._warm_routing_capabilities()
+        assert client._supports_mrt() is False
+
+        pnc.join(_FakeVersion())
+        clock.advance(1.0)
+
+        assert client._supports_mrt() is True
+
+    def test_within_the_interval_the_node_list_is_not_rewalked(self, clock):
+        pnc = _FakePncClient(_FakeVersion())
+        client = _Client(pnc, tend_interval=timedelta(seconds=1))
+        client._warm_routing_capabilities()
+        calls_after_warm = pnc.list_calls
+
+        clock.advance(0.9)
+        for _ in range(100):
+            assert client._supports_mrt() is True
+
+        assert pnc.list_calls == calls_after_warm
+
+    def test_unlistable_nodes_keep_the_gate_closed(self, clock):
+        """A plain batch is the safe fallback for an unverifiable cluster."""
+        proxy = _FakeThreadLocalProxy()
+        client = _Client(proxy, tend_interval=timedelta(seconds=1))
+        client._warm_routing_capabilities()
+        assert client._supports_mrt() is False
+
+        clock.advance(5.0)
+        assert client._supports_mrt() is False
+        assert proxy.attribute_misses == []
+
+    def test_a_reader_refreshes_when_connect_never_warmed(self):
+        client = _Client(_FakePncClient(_FakeVersion()))
+        assert client._supports_mrt() is True
 
 
 class TestRefreshUnderARunningLoop:

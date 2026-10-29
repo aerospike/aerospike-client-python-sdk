@@ -369,6 +369,37 @@ Each change names the operations it applies to: `all=` covers every
 operation, and narrower scopes such as `reads=`, `reads_batch=`, or
 `writes_sc=` override it for their operations.
 
+(retryable-writes)=
+### Retryable and non-retryable writes
+
+`writes_retryable=` and `writes_non_retryable=` split writes by whether a
+retry after an in-doubt attempt is safe. A write resolves the retryable
+scope when every operation it carries is idempotent; one operation that is
+not takes the whole write to the non-retryable scope. `Behavior.DEFAULT`
+gives retryable writes two retries and non-retryable writes none.
+
+| Write | Scope |
+|-------|-------|
+| `set_to`, `put`, `remove_bin`, `session.put`, `put_many` | retryable |
+| `delete`, `touch`, reads mixed into a write | retryable |
+| `add`, `append`, `prepend` | non-retryable |
+| Any list, map, bit, HLL, string, or expression modify | non-retryable |
+| UDF | non-retryable |
+| `add_operation(op)` | by the operation's own `is_idempotent` |
+| Batch | each row by its own operations; the batch-level retry budget is retryable only when every row is |
+| Background job | by its operations; a UDF job is non-retryable |
+
+`insert` follows the same rule, so it is retryable. If a first attempt
+reached the server and only its reply was lost, the retry reports
+`KEY_EXISTS_ERROR`; the error carries `in_doubt` either way.
+
+```python
+critical = Behavior.DEFAULT.derive_with_changes(
+    "critical-writes",
+    writes_retryable=Settings(max_retries=4),
+)
+```
+
 ## DataSets
 
 A `DataSet` represents a namespace + set pair and is a convenient key factory:

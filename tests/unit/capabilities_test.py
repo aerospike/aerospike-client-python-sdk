@@ -28,7 +28,8 @@ class _FakeVersion:
     """Stand-in for PNC ``Version``: version fields + predicate methods."""
 
     def __init__(self, major, minor, patch, build=0, *,
-                 ael=None, query_ops=None, string_ops=None, query_selection=None):
+                 ael=None, query_ops=None, string_ops=None, query_selection=None,
+                 mrt=None):
         self.major, self.minor, self.patch, self.build = major, minor, patch, build
         # Default each predicate to "supported iff >= 8.2.0", the real floor,
         # unless the test pins it explicitly.
@@ -38,6 +39,7 @@ class _FakeVersion:
                            if query_ops is None else query_ops)
         self._string_ops = ge820 if string_ops is None else string_ops
         self._query_selection = ge820 if query_selection is None else query_selection
+        self._mrt = major >= 8 if mrt is None else mrt
 
     def supports_server_compiled_ael(self):
         return self._ael
@@ -50,6 +52,9 @@ class _FakeVersion:
 
     def supports_query_selection(self):
         return self._query_selection
+
+    def supports_mrt(self):
+        return self._mrt
 
 
 class TestVersionKeyAndMin:
@@ -81,6 +86,7 @@ class TestAllNodesFolds:
         assert capabilities.supports_string_operations(vs)
         assert capabilities.supports_query_operations(vs)
         assert capabilities.supports_query_selection(vs)
+        assert capabilities.supports_mrt(vs)
 
     def test_one_lagging_node_downgrades_820_features(self):
         # One node at 8.1.2 fails the >= 8.2.0 features but keeps 8.1.2 ones.
@@ -89,24 +95,31 @@ class TestAllNodesFolds:
         assert not capabilities.supports_string_operations(vs)
         assert not capabilities.supports_query_selection(vs)
         assert capabilities.supports_query_operations(vs)  # 8.1.2 floor
+        assert capabilities.supports_mrt(vs)  # 8.0 floor
 
     def test_one_lagging_node_downgrades_812_feature(self):
         vs = [_FakeVersion(8, 1, 2), _FakeVersion(8, 1, 1)]
         assert not capabilities.supports_query_operations(vs)
+
+    def test_one_pre_8_node_downgrades_transactions(self):
+        vs = [_FakeVersion(8, 2, 0), _FakeVersion(7, 2, 0)]
+        assert not capabilities.supports_mrt(vs)
 
     def test_empty_cluster_supports_nothing(self):
         assert not capabilities.supports_ael([])
         assert not capabilities.supports_query_operations([])
         assert not capabilities.supports_string_operations([])
         assert not capabilities.supports_query_selection([])
+        assert not capabilities.supports_mrt([])
 
     def test_predicates_delegate_to_pnc_not_version_floor(self):
         # Every predicate reads PNC's Version.supports_*(), not a hardcoded
         # version check: a node reporting the predicate False despite a high
         # version is honored.
         vs = [_FakeVersion(9, 0, 0, ael=False, string_ops=False, query_ops=False,
-                           query_selection=False)]
+                           query_selection=False, mrt=False)]
         assert not capabilities.supports_ael(vs)
         assert not capabilities.supports_string_operations(vs)
         assert not capabilities.supports_query_operations(vs)
         assert not capabilities.supports_query_selection(vs)
+        assert not capabilities.supports_mrt(vs)
