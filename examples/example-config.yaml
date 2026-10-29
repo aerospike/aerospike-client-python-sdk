@@ -2,6 +2,8 @@
 # system settings in one file.
 # maximum_number_of_call_attempts counts the initial call (2 = one retry).
 
+version: "1.2.0"
+
 behaviors:
   # Baseline the other profiles inherit from.
   DEFAULT:

@@ -37,7 +37,11 @@ from aerospike_native import Host as PncHost
 from aerospike_sdk import capabilities
 from aerospike_sdk.exceptions import AerospikeError, PncAerospikeError, _convert_pnc_exception
 from aerospike_sdk.metrics import MetricsPolicy, MetricsSnapshot
-from aerospike_sdk.metrics.export import MetricsExporterType, export_mode
+from aerospike_sdk.metrics.export import (
+    MetricsExporterType,
+    _NodeCloseTracker,
+    export_mode,
+)
 from aerospike_sdk.metrics.snapshot import ProcessSampler
 from aerospike_sdk.metrics.usage import COMMAND_COUNT
 from aerospike_sdk.node_shared import NodeBase
@@ -1111,7 +1115,7 @@ class ClusterBase(Generic[_S, _TS, _N]):
         client = self._sdk_client
         pnc = client.underlying_client
         client_policy = client._policy
-        return MetricsSnapshot(
+        snapshot = MetricsSnapshot(
             pnc.metrics(),
             policy=self._metrics_policy,
             nodes=pnc.nodes(),
@@ -1125,6 +1129,11 @@ class ClusterBase(Generic[_S, _TS, _N]):
             metrics_enabled=pnc.metrics_enabled(),
             usage_enabled=client._usage_on,
         )
+        tracker = getattr(self, "_metrics_departure_tracker", None)
+        if tracker is None:
+            tracker = _NodeCloseTracker()
+            setattr(self, "_metrics_departure_tracker", tracker)
+        return snapshot._with_departed(tracker)
 
     def _check_metrics_switch_is_free(self, method: str) -> None:
         """Refuse an API flip of the master switch while a loaded file owns it.

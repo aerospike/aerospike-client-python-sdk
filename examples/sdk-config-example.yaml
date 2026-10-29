@@ -19,7 +19,7 @@
 # Python exceptions always carry a traceback, and the XDR bit is a
 # connector-level policy override, not a behavior.
 
-version: "1.0.0"
+version: "1.2.0"
 
 # =============================================================================
 # SYSTEM SETTINGS
@@ -54,6 +54,11 @@ system:
       # written.
       # report_size_limit is 0 (no rotation) or at least 1000000 bytes.
       export_interval: 30s
+      # One custom exporter may consume at most this long per callback.
+      export_timeout: 10s
+      # Suspend repeated failures, then retry by wall-clock delay.
+      max_consecutive_failures: 3
+      suspend_retry_interval: 60s
       exporter: file
       report_dir: ""
       report_size_limit: 10mb

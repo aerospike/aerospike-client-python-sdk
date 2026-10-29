@@ -17,7 +17,7 @@ schemas; they can both be set in the same process without conflict.
 
 ```yaml
 # AEROSPIKE_SDK_CONFIG_URL=file:///etc/aerospike/sdk-config.yaml
-version: "1.0.0"
+version: "1.2.0"
 system:
   DEFAULT:
     connections:
@@ -63,6 +63,12 @@ Effective settings resolve per field, highest layer first:
 A field absent from one layer falls through to the next, so the file wins
 only for the fields it actually provides. Durations use a unit suffix
 (`250ms`, `55s`, `5m`, `2h`).
+
+Schema versions `1.0.0` and `1.2.0` are supported. Metrics v3 keys such as
+`enabled`, `export_interval`, `exporter`, `report_dir`, and `extended` require
+`1.2.0`. Schema `1.0.0` accepts the legacy flat `metrics.enable` switch and
+warns while ignoring v3 siblings. Unsupported versions are ignored as a whole;
+headerless documents retain the historical behavior and use the latest schema.
 
 Two kinds of settings live in the file. The `connections`, `circuit_breaker`,
 and `refresh` groups configure the connection itself and take effect at
