@@ -744,9 +744,12 @@ class TestFinalExport:
                 await asyncio.sleep(0.02)
             cluster.disable_metrics()
         assert len(exporter.counts) >= 2
-        # Every periodic tick ran on the metrics thread; only disable's
-        # closing snapshot is taken by the caller.
-        assert set(threads[:-1]) == {"aerospike-metrics-export"}
+        # Periodic ticks run on the metrics thread. Disable takes the one
+        # closing snapshot on the caller, and that call can be recorded
+        # before a tick that was already in flight.
+        caller = threading.current_thread().name
+        assert threads.count(caller) == 1
+        assert set(threads) == {"aerospike-metrics-export", caller}
 
     async def test_enable_waits_for_a_pending_final_push(
         self, aerospike_host, make_cluster_definition,
