@@ -362,7 +362,7 @@ class TestMetricsExport:
             metrics_cluster.enable_metrics(_SHAPE_SAFE)
             # The configured interval is 30s; drive one push directly rather
             # than waiting for it.
-            await metrics_cluster._export_timer._export_once()
+            await asyncio.to_thread(metrics_cluster._export_timer._export_once)
             assert len(first) == 1 and len(second) == 1
             doc = first[0]
             assert doc["client_type"] == "python-sdk"
@@ -526,7 +526,7 @@ class TestMetricsExport:
 
         timer = AsyncMetricsExportTimer(_EmptiedCluster(metrics_cluster), 3600.0)
 
-        await timer._export_once()
+        await asyncio.to_thread(timer._export_once)
         assert len(received) == 1
         departed = [
             f"{n['node_address']}:{n['node_port']}"
@@ -540,7 +540,7 @@ class TestMetricsExport:
         assert received[0]["nodes_departed"][0]["connections"]["opened"] >= 0
 
         # Reported once per host, not once per export tick.
-        await timer._export_once()
+        await asyncio.to_thread(timer._export_once)
         assert received[1]["nodes_departed"] == []
         metrics_cluster.disable_metrics()
 
@@ -661,7 +661,7 @@ class TestFinalExport:
             base = metrics_cluster.metrics_snapshot().command_count
             await _do_some_ops(metrics_cluster, count=3)
             metrics_cluster.disable_metrics()
-            await metrics_cluster._final_export
+            await asyncio.wrap_future(metrics_cluster._final_export)
             assert exporter.counts == [base + 6]
         finally:
             metrics_cluster.remove_exporter(exporter)
@@ -686,10 +686,39 @@ class TestFinalExport:
             _with_metrics_settings(cluster, report_dir=str(tmp_path))
             cluster.enable_metrics(_SHAPE_SAFE)
             cluster.disable_metrics()
-            await cluster._final_export
+            await asyncio.wrap_future(cluster._final_export)
         (log,) = tmp_path.iterdir()
         lines = log.read_text().splitlines()
         assert len(lines) == 2 and " cluster[" in lines[1]
+
+    async def test_periodic_snapshot_is_built_on_the_metrics_thread(
+        self, aerospike_host, make_cluster_definition,
+    ):
+        """The live snapshot is taken on the metrics thread, not the application loop."""
+        threads = []
+        exporter = _CommandCounts()
+        definition = make_cluster_definition(aerospike_host).with_system_settings(_CUSTOM_EXPORT)
+        async with definition.connect() as cluster:
+            real = cluster.metrics_snapshot
+
+            def recording():
+                threads.append(threading.current_thread().name)
+                return real()
+
+            cluster.metrics_snapshot = recording
+            _with_metrics_settings(cluster, export_interval=timedelta(milliseconds=20))
+            cluster.add_exporter(exporter)
+            cluster.enable_metrics(_SHAPE_SAFE)
+            await _do_some_ops(cluster, count=3)
+            for _ in range(100):
+                if len(exporter.counts) >= 2:
+                    break
+                await asyncio.sleep(0.02)
+            cluster.disable_metrics()
+        assert len(exporter.counts) >= 2
+        # Every periodic tick ran on the metrics thread; only disable's
+        # closing snapshot is taken by the caller.
+        assert set(threads[:-1]) == {"aerospike-metrics-export"}
 
     async def test_enable_waits_for_a_pending_final_push(
         self, aerospike_host, make_cluster_definition,

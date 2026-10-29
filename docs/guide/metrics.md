@@ -322,10 +322,12 @@ arbitrary application code. An async timeout does not cancel the exporter,
 because the timeout bounds SDK delivery rather than forcibly terminating
 application-owned work.
 
-Async exporter coroutines run on a dedicated metrics-owned daemon thread and
-event loop, never on the application loop, tend thread, or command path.
-They must not use clients, locks, queues, or other asyncio objects bound to
-the application's event loop.
+Both clients run the periodic cycle on the `aerospike-metrics-export` daemon
+thread: it waits out the interval, builds the snapshot, and calls each
+exporter. None of that runs on the application's event loop, the tend thread,
+or the command path. Async exporter coroutines run on a dedicated
+metrics-owned daemon event loop. They must not use clients, locks, queues, or
+other asyncio objects bound to the application's event loop.
 
 Disabling metrics and closing the cluster each push one last snapshot, so the
 activity since the previous interval is not lost. It is taken before
@@ -333,11 +335,16 @@ collection stops. Sync shutdown interrupts the SDK metrics thread's wait for a
 blocked custom exporter before attempting the final delivery. Python cannot
 terminate arbitrary application code, so that exporter's daemon invocation
 may remain until the call returns. The async client's `disable_metrics()` is a
-plain method that returns straight away, while the closing snapshot is
-delivered in the background; `await cluster.close()` waits for that delivery,
-and re-enabling holds the next export until it finishes, so an exporter never
+plain method that returns straight away, while the metrics thread delivers the
+closing snapshot; `await cluster.close()` waits for that delivery, and
+re-enabling holds the next export until it finishes, so an exporter never
 sees two exports at once. Changing the policy with `enable_metrics()` while
 metrics are on restarts the push without a closing snapshot.
+
+Disabling, closing, or restarting the push closes the client-owned file
+writer, never while it is still writing. If a file `export()` outlives
+`export_timeout`, the client stops waiting, but the file is closed only when
+that call returns. Exporters the application registered stay open.
 
 A node that has left the cluster remains under `nodes_departed`, with the same
 shape as `nodes` and its final counters, until an export succeeds. On-demand
