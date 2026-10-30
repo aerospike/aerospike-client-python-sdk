@@ -192,6 +192,8 @@ _BACKGROUND_IN_TXN_ERROR = (
     "would commit or roll back with it. Start the task from a regular session."
 )
 
+_TOP_K_MAX = 1000
+
 _bitwise_and = BitOperation.and_
 _bitwise_not = BitOperation.not_
 _bitwise_or = BitOperation.or_
@@ -1309,22 +1311,22 @@ class _QueryBuilderBase:
 
         Raises:
             AerospikeError: ``ResultCode.PARAMETER_ERROR`` on a key query or
-                when ``k`` is below 1, or at execute when ``k`` is above 1000
-                or no :meth:`order_by` key is set.
+                when ``k`` is outside 1 to 1000, or at execute when no
+                :meth:`order_by` key is set.
 
         See Also:
             :meth:`order_by`: The key the records are ranked by.
         """
         self._reject_top_k_on_key_query()
-        if k < 1:
-            self._raise_top_k_conflict(f"topK(k) must be at least 1; got {k}")
+        if not 1 <= k <= _TOP_K_MAX:
+            self._raise_top_k_conflict(f"top_k(k) must be in [1, {_TOP_K_MAX}]; got {k}")
         self._top_k = k
         return self
 
     def _reject_top_k_on_key_query(self) -> None:
         if self._single_key is not None or self._keys is not None or self._specs:
             self._raise_top_k_conflict(
-                "orderBy/topK is only valid on a dataset query, not a key query"
+                "order_by/top_k is only valid on a dataset query, not a key query"
             )
 
     def _apply_top_k(self, statement: Statement) -> None:
@@ -1341,23 +1343,23 @@ class _QueryBuilderBase:
             return
         if has_order_by != has_top_k:
             self._raise_top_k_conflict(
-                "orderBy(...) and topK(...) must be set together (both or neither); "
-                f"got orderBy={has_order_by}, topK={has_top_k}"
+                "order_by(...) and top_k(...) must be set together (both or neither); "
+                f"got order_by={has_order_by}, top_k={has_top_k}"
             )
         if self._with_no_bins:
             self._raise_top_k_conflict(
-                "orderBy/topK is incompatible with with_no_bins() -- "
+                "order_by/top_k is incompatible with with_no_bins() -- "
                 "Top-K needs a value to rank on"
             )
         if self._chunk_size is not None:
             self._raise_top_k_conflict(
-                "orderBy/topK is incompatible with chunk_size(...) (server-side streaming); "
-                "Top-K is single-shot, its whole result is already bounded to k <= 1000"
+                "order_by/top_k is incompatible with chunk_size(...) (server-side streaming); "
+                f"Top-K is single-shot, its whole result is already bounded to k <= {_TOP_K_MAX}"
             )
         if self._limit is not None:
             self._raise_top_k_conflict(
-                "orderBy/topK is incompatible with limit(...); topK(k) is itself the "
-                "result cap -- remove limit() when using orderBy()/topK()"
+                "order_by/top_k is incompatible with limit(...); top_k(k) is itself the "
+                "result cap -- remove limit() when using order_by()/top_k()"
             )
         sdk_client = self._sdk_client
         if sdk_client is not None and not sdk_client.supports_query_top_k:

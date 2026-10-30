@@ -180,12 +180,14 @@ class TestTopK:
         assert similarities[0] == pytest.approx(1.0)
         assert len(similarities) == 3
 
-    async def test_k_above_the_server_limit_is_refused(self, session):
+    async def test_two_keys_on_one_bin_are_refused(self, session):
         with pytest.raises(AerospikeError) as exc_info:
             await (
                 session.query(_DS)
                 .order_by("price", BinDataType.DOUBLE, Order.ASC)
-                .top_k(1001)
+                .then_order_by("price", BinDataType.DOUBLE, Order.DESC)
+                .top_k(3)
                 .execute()
             )
         assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+        assert "different bins" in str(exc_info.value)

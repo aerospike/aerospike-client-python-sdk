@@ -109,18 +109,23 @@ class TestBuilderChecks:
         qb = _builder().order_by("price", BinDataType.DOUBLE, Order.ASC)
         with pytest.raises(AerospikeError) as exc_info:
             qb._build_dataset_read_statement()
-        _assert_parameter_error(exc_info, "got orderBy=True, topK=False")
+        _assert_parameter_error(exc_info, "got order_by=True, top_k=False")
 
-    @pytest.mark.parametrize("k", [0, -1])
-    def test_top_k_below_one_is_refused_at_chain_time(self, k):
+    @pytest.mark.parametrize("k", [0, -1, 1001])
+    def test_k_out_of_range_is_refused_at_chain_time(self, k):
         with pytest.raises(AerospikeError) as exc_info:
             _builder().top_k(k)
-        _assert_parameter_error(exc_info, f"got {k}")
+        _assert_parameter_error(exc_info, f"top_k(k) must be in [1, 1000]; got {k}")
+
+    @pytest.mark.parametrize("k", [1, 1000])
+    def test_k_at_the_bounds_is_accepted(self, k):
+        qb = _builder().order_by("price", BinDataType.DOUBLE, Order.ASC).top_k(k)
+        assert qb._build_dataset_read_statement().top_k == k
 
     def test_top_k_without_order_by(self):
         with pytest.raises(AerospikeError) as exc_info:
             _builder().top_k(5)._build_dataset_read_statement()
-        _assert_parameter_error(exc_info, "got orderBy=False, topK=True")
+        _assert_parameter_error(exc_info, "got order_by=False, top_k=True")
 
     @pytest.mark.parametrize(
         "knob, fragment",

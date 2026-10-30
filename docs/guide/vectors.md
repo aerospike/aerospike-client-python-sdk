@@ -154,3 +154,43 @@ ranked = Behavior.DEFAULT.derive_with_changes(
 )
 session = cluster.create_session(ranked)
 ```
+
+## Memory Pressure
+
+A vector bin holds a 6-byte header plus its elements, so a 1536-dimension
+`FLOAT32` vector takes about 6 KB per record, and `FLOAT16` halves that.
+When a node reaches its stop-writes threshold, it refuses writes to the
+records whose master copy it holds, vector writes included, and the client
+raises {class}`~aerospike_sdk.CapacityError` with
+`ResultCode.SERVER_MEM_ERROR`. Writes to records mastered on other nodes
+still succeed, even when their replica lives on the stopped node, so a
+single node in stop-writes fails only part of an ingestion run. The client
+does not retry the error: the write is refused until memory is freed or
+capacity is added.
+
+Reads keep working under stop-writes, and so do deletes, dataset queries,
+and Top-K queries. Deleting records is one way to free memory.
+
+```python
+from aerospike_sdk import CapacityError, ResultCode
+
+try:
+    await session.upsert(key).put({"embedding": Vector(values)}).execute()
+except CapacityError as e:
+    if e.result_code == ResultCode.SERVER_MEM_ERROR:
+        ...  # stop or slow ingestion; retry after memory is freed
+    else:
+        raise  # another capacity limit
+```
+
+`CapacityError` also covers device overload, a busy key
+({class}`~aerospike_sdk.exceptions.KeyBusyError`), full query and batch
+queues, and a batch over the server's request limit, so check
+`result_code` before treating the error as out of memory.
+
+A Top-K query keeps up to `k` records with every bin the query returns.
+Each node sends its own best `k`, so the client receives up to `k` records
+per node before it keeps the best `k` overall. Return the distance and
+leave out the vector bin unless the caller needs it: a 128-dimension
+`FLOAT32` vector adds 518 bytes to every returned record, while the
+distance adds an 8-byte double plus its bin name.
