@@ -15,7 +15,7 @@
 
 """Routing capability cache shared by async and sync clients.
 
-Field ``43`` (server-compiled AEL), field ``44`` (query selection) and
+Field ``43`` (server-compiled AEL), field ``44`` (query selection), Top-K and
 multi-record transaction gates are derived from the node list and cached on the
 client for builder hot paths. Mixed into ``Client`` and ``SyncClient``.
 
@@ -63,6 +63,7 @@ class _RoutingCapabilitiesClient(Protocol):
     _sdk_settings: SystemSettings
     _cached_supports_query_selection: Optional[bool]
     _cached_supports_server_compiled_ael: Optional[bool]
+    _cached_supports_query_top_k: Optional[bool]
     _cached_supports_mrt: Optional[bool]
     _routing_capability_stamp: Optional[float]
     _routing_capability_ttl: Optional[Tuple[Any, float]]
@@ -78,10 +79,11 @@ class _RoutingCapabilitiesClient(Protocol):
 
 
 class RoutingCapabilitiesMixin:
-    """Tend-interval-refreshed cache for the field ``43`` / ``44`` / MRT gates."""
+    """Tend-interval-refreshed cache for the field ``43`` / ``44`` / Top-K / MRT gates."""
 
     _cached_supports_query_selection: Optional[bool]
     _cached_supports_server_compiled_ael: Optional[bool]
+    _cached_supports_query_top_k: Optional[bool]
     _cached_supports_mrt: Optional[bool]
     _routing_capability_stamp: Optional[float]
     _routing_capability_ttl: Optional[Tuple[Any, float]]
@@ -90,6 +92,7 @@ class RoutingCapabilitiesMixin:
         """Initialize routing caches; call from client ``__init__``."""
         self._cached_supports_query_selection = None
         self._cached_supports_server_compiled_ael = None
+        self._cached_supports_query_top_k = None
         self._cached_supports_mrt = None
         self._routing_capability_stamp = None
         self._routing_capability_ttl = None
@@ -98,6 +101,7 @@ class RoutingCapabilitiesMixin:
         """Drop routing caches; call from client close paths."""
         self._cached_supports_query_selection = None
         self._cached_supports_server_compiled_ael = None
+        self._cached_supports_query_top_k = None
         self._cached_supports_mrt = None
         self._routing_capability_stamp = None
         self._routing_capability_ttl = None
@@ -149,6 +153,7 @@ class RoutingCapabilitiesMixin:
             versions,
         )
         self._cached_supports_server_compiled_ael = capabilities.supports_ael(versions)
+        self._cached_supports_query_top_k = capabilities.supports_query_top_k(versions)
         self._cached_supports_mrt = capabilities.supports_mrt(versions)
 
     def _apply_undeterminable_routing_capabilities(
@@ -163,9 +168,13 @@ class RoutingCapabilitiesMixin:
         fall back on, so an unverifiable cluster keeps it closed. The MRT gate
         stays closed too: a plain batch is the safe fallback, while a
         transaction an unverified node cannot serve fails the whole batch.
+        The Top-K gate stays open, like field ``43``: there is no other way to
+        run a ranked query, and PNC still refuses one when a node it routes to
+        cannot rank, so closing it would only reject a capable cluster.
         """
         self._cached_supports_query_selection = False
         self._cached_supports_server_compiled_ael = True
+        self._cached_supports_query_top_k = True
         self._cached_supports_mrt = False
 
     def _routing_capability_ttl_seconds(self: _RoutingCapabilitiesClient) -> float:
@@ -231,6 +240,14 @@ class RoutingCapabilitiesMixin:
             return False
         self._refresh_routing_capabilities_if_stale()
         return bool(self._cached_supports_query_selection)
+
+    @property
+    def supports_query_top_k(self: _RoutingCapabilitiesClient) -> bool:
+        """``True`` when every cluster node ranks queries by order keys (Top-K)."""
+        if not self._connected or self._client is None:
+            return False
+        self._refresh_routing_capabilities_if_stale()
+        return bool(self._cached_supports_query_top_k)
 
     @property
     def supports_server_compiled_ael(self: _RoutingCapabilitiesClient) -> bool:

@@ -15,8 +15,9 @@
 
 """PNC capability markers and skip helpers shared by unit and integration tests.
 
-Integration tests declare requirements with :data:`requires_server_compiled_ael`
-or :data:`requires_query_selection`; ``tests/integration/conftest.py`` probes the
+Integration tests declare requirements with :data:`requires_server_compiled_ael`,
+:data:`requires_query_selection`, :data:`requires_vector` or
+:data:`requires_query_top_k`; ``tests/integration/conftest.py`` probes the
 marker's seed (``host=``, default ``aerospike_host``) once per session and calls
 the matching skip helper (the same ``supports_*`` flags the client derives from
 PNC ``Version.supports_*``).
@@ -42,6 +43,14 @@ class SupportsPncCapabilities(Protocol):
 
     @property
     def supports_query_selection(self) -> bool:
+        ...
+
+    @property
+    def supports_vector(self) -> bool:
+        ...
+
+    @property
+    def supports_query_top_k(self) -> bool:
         ...
 
 
@@ -82,6 +91,31 @@ def skip_if_lacks_query_selection(client: SupportsPncCapabilities) -> None:
     pytest.skip(
         "Requires query selection: Version.supports_query_selection on all nodes "
         "(Cluster.supports_query_selection())."
+    )
+
+
+def skip_if_lacks_vector(client: SupportsPncCapabilities) -> None:
+    """Skip when vector bins and vector expressions are not available on the probed cluster.
+
+    Reads :attr:`SupportsPncCapabilities.supports_vector`, which the session
+    probe fills from ``Cluster.supports_vector()``.
+    """
+    if _capability_bool(client, "supports_vector") is True:
+        return
+    pytest.skip("Requires vectors: Version.supports_vector on all nodes (Cluster.supports_vector()).")
+
+
+def skip_if_lacks_query_top_k(client: SupportsPncCapabilities) -> None:
+    """Skip when Top-K ranked queries are not available on the probed cluster.
+
+    Reads :attr:`SupportsPncCapabilities.supports_query_top_k`, which the
+    session probe fills from ``Cluster.supports_query_top_k()``.
+    """
+    if _capability_bool(client, "supports_query_top_k") is True:
+        return
+    pytest.skip(
+        "Requires Top-K: Version.supports_query_top_k on all nodes "
+        "(Cluster.supports_query_top_k())."
     )
 
 
@@ -160,3 +194,5 @@ def assert_point_invalid_ael_rejected_sync(execute: Callable[[], Any]) -> None:
 
 requires_server_compiled_ael = pytest.mark.requires_server_compiled_ael
 requires_query_selection = pytest.mark.requires_query_selection
+requires_vector = pytest.mark.requires_vector
+requires_query_top_k = pytest.mark.requires_query_top_k

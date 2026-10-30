@@ -38,6 +38,7 @@ from typing import (
     Generic,
     Iterable,
     List,
+    NoReturn,
     Optional,
     Sequence,
     Tuple,
@@ -59,6 +60,7 @@ from aerospike_native import (
     BatchUDFPolicy,
     BatchWriteOp,
     BatchWritePolicy,
+    BinDataType,
     BitOperation,
     BitPolicy,
     BitwiseResizeFlags,
@@ -86,6 +88,7 @@ from aerospike_native import (
     MapReturnType,
     MapWriteFlags,
     Operation,
+    Order,
     PartitionFilter,
     QueryDuration,
     QueryPolicy,
@@ -426,6 +429,8 @@ class _QueryBuilderBase:
     _query_hint: Optional[QueryHint] = None
     _where_ael: Optional[str] = None
     _limit: Optional[int] = None
+    _order_keys: Optional[List[Tuple[str, BinDataType, Order]]] = None
+    _top_k: Optional[int] = None
     _records_per_second: Optional[int] = None
     _partition_filter: Optional[PartitionFilter] = None
     _keys_selected: bool = False
@@ -1175,6 +1180,199 @@ class _QueryBuilderBase:
             raise ValueError(f"Limit must be > 0, not {limit}")
         self._limit = limit
         return self
+
+    def order_by(self, bin_name: str, data_type: BinDataType, order: Order) -> Self:
+        """Rank a dataset query by a bin and keep the best :meth:`top_k` records.
+
+        Every node ranks its own matches and the client merges them, so the
+        stream holds at most ``k`` records, best first. Ranking runs after the
+        index filter and :meth:`where`: it decides which matches come back,
+        not which records match. A record whose key bin is missing or holds
+        another type ranks last in either direction.
+
+        ``bin_name`` names a bin of the *returned* record: one listed in
+        :meth:`bins`, or one a ``.bin(...)`` read returns, such as
+        ``.bin("similarity").select_from(Exp.vector_distance(...))``. Pass
+        ``ignore_eval_failure=True`` there so a record with no vector, or one
+        of another dimension, comes back with no value and ranks last instead
+        of being left out. Calling
+        this again replaces every key set before; use :meth:`then_order_by`
+        for a tie-breaker. Requires :meth:`top_k` and every node on server
+        8.2.1 or later.
+
+        Example::
+
+            from aerospike_sdk import BinDataType, Exp, Order, Vector, VectorDistanceMetric
+
+            probe = Vector([0.12, 0.88, 0.47])
+            stream = await (
+                session.query(products)
+                    .where("$.category == 'shoes'")
+                    .bin("similarity").select_from(
+                        Exp.vector_distance(
+                            VectorDistanceMetric.COSINE_SIMILARITY,
+                            probe,
+                            Exp.vector_bin("embedding"),
+                        ),
+                        ignore_eval_failure=True,
+                    )
+                    .order_by("similarity", BinDataType.DOUBLE, Order.DESC)
+                    .top_k(10)
+                    .execute()
+            )
+
+        Args:
+            bin_name: Bin of the returned record to rank by.
+            data_type: The key's type, :attr:`BinDataType.INTEGER` or
+                :attr:`BinDataType.DOUBLE`.
+            order: :attr:`Order.ASC` for smallest first, :attr:`Order.DESC`
+                for largest first.
+
+        Returns:
+            This builder for chaining.
+
+        Raises:
+            AerospikeError: ``ResultCode.PARAMETER_ERROR`` on a key query. At
+                execute, also when :meth:`top_k` is missing, when combined
+                with :meth:`limit`, :meth:`chunk_size` or :meth:`with_no_bins`,
+                or when a node cannot rank.
+
+        See Also:
+            :meth:`then_order_by`: Second key, compared when the first ties.
+            :meth:`top_k`: How many ranked records to return.
+        """
+        self._reject_top_k_on_key_query()
+        self._order_keys = [(bin_name, data_type, order)]
+        return self
+
+    def then_order_by(self, bin_name: str, data_type: BinDataType, order: Order) -> Self:
+        """Add a tie-breaking key, compared only when the earlier key ties.
+
+        A query takes at most two keys, on different bins. Called with no
+        earlier :meth:`order_by`, this key becomes the first.
+
+        Example::
+
+            stream = await (
+                session.query(products)
+                    .order_by("rating", BinDataType.INTEGER, Order.DESC)
+                    .then_order_by("price", BinDataType.DOUBLE, Order.ASC)
+                    .top_k(20)
+                    .execute()
+            )
+
+        Args:
+            bin_name: Bin of the returned record to rank by.
+            data_type: The key's type, :attr:`BinDataType.INTEGER` or
+                :attr:`BinDataType.DOUBLE`.
+            order: :attr:`Order.ASC` or :attr:`Order.DESC`.
+
+        Returns:
+            This builder for chaining.
+
+        Raises:
+            AerospikeError: ``ResultCode.PARAMETER_ERROR`` on a key query, or
+                at execute for a third key or a repeated bin.
+
+        See Also:
+            :meth:`order_by`: First key, replacing any set before.
+        """
+        self._reject_top_k_on_key_query()
+        key = (bin_name, data_type, order)
+        if self._order_keys is None:
+            self._order_keys = [key]
+        else:
+            self._order_keys.append(key)
+        return self
+
+    def top_k(self, k: int) -> Self:
+        """Return only the ``k`` best records by the :meth:`order_by` keys.
+
+        ``k`` is the whole result's size, so :meth:`limit` and
+        :meth:`chunk_size` do not apply to a ranked query.
+
+        Example::
+
+            stream = await (
+                session.query(products)
+                    .order_by("price", BinDataType.DOUBLE, Order.ASC)
+                    .top_k(5)
+                    .execute()
+            )
+            cheapest = [row.record.bins["price"] async for row in stream]
+
+        Args:
+            k: Number of records to return, from 1 to 1000.
+
+        Returns:
+            This builder for chaining.
+
+        Raises:
+            AerospikeError: ``ResultCode.PARAMETER_ERROR`` on a key query or
+                when ``k`` is below 1, or at execute when ``k`` is above 1000
+                or no :meth:`order_by` key is set.
+
+        See Also:
+            :meth:`order_by`: The key the records are ranked by.
+        """
+        self._reject_top_k_on_key_query()
+        if k < 1:
+            self._raise_top_k_conflict(f"topK(k) must be at least 1; got {k}")
+        self._top_k = k
+        return self
+
+    def _reject_top_k_on_key_query(self) -> None:
+        if self._single_key is not None or self._keys is not None or self._specs:
+            self._raise_top_k_conflict(
+                "orderBy/topK is only valid on a dataset query, not a key query"
+            )
+
+    def _apply_top_k(self, statement: Statement) -> None:
+        """Copy the ranking onto *statement* after the checks PNC does not make.
+
+        PNC checks each key and ``k`` when the query runs. The combinations
+        below involve builder knobs it never sees, and it does not refuse
+        them on every query path, so they are refused here, before any
+        request.
+        """
+        has_order_by = self._order_keys is not None
+        has_top_k = self._top_k is not None
+        if not has_order_by and not has_top_k:
+            return
+        if has_order_by != has_top_k:
+            self._raise_top_k_conflict(
+                "orderBy(...) and topK(...) must be set together (both or neither); "
+                f"got orderBy={has_order_by}, topK={has_top_k}"
+            )
+        if self._with_no_bins:
+            self._raise_top_k_conflict(
+                "orderBy/topK is incompatible with with_no_bins() -- "
+                "Top-K needs a value to rank on"
+            )
+        if self._chunk_size is not None:
+            self._raise_top_k_conflict(
+                "orderBy/topK is incompatible with chunk_size(...) (server-side streaming); "
+                "Top-K is single-shot, its whole result is already bounded to k <= 1000"
+            )
+        if self._limit is not None:
+            self._raise_top_k_conflict(
+                "orderBy/topK is incompatible with limit(...); topK(k) is itself the "
+                "result cap -- remove limit() when using orderBy()/topK()"
+            )
+        sdk_client = self._sdk_client
+        if sdk_client is not None and not sdk_client.supports_query_top_k:
+            self._raise_top_k_conflict("Top-K is not supported by all nodes in the cluster")
+        keys = cast(List[Tuple[str, BinDataType, Order]], self._order_keys)
+        statement.set_order_by(*keys[0])
+        for key in keys[1:]:
+            statement.then_order_by(*key)
+        statement.top_k = self._top_k
+
+    @staticmethod
+    def _raise_top_k_conflict(message: str) -> NoReturn:
+        raise _result_code_to_exception(
+            ResultCode.PARAMETER_ERROR, message, from_server=False,
+        )
 
     def with_hint(self, hint: QueryHint) -> Self:
         """Attach a query hint for secondary index selection or scheduling.
@@ -2455,6 +2653,7 @@ class _QueryBuilderBase:
         if self._operations:
             projection = list(self._op_projection) if self._op_projection else []
             statement.set_operations(projection + list(self._operations))
+        self._apply_top_k(statement)
         return statement
 
     def _make_udf_write_policy(self, spec: _OperationSpec) -> WritePolicy:

@@ -32,6 +32,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from aerospike_native import Vector
 
 
 class OperationResult:
@@ -207,6 +208,39 @@ class OperationResult:
         if isinstance(v, dict):
             return v
         raise TypeError(f"OperationResult value is {type(v).__name__}, not dict")
+
+    # -- Vector accessor ------------------------------------------------------
+
+    def get_vector(self) -> Vector | None:
+        """Return the value as a :class:`~aerospike_sdk.Vector`; ``None`` is propagated.
+
+        A list of floats is not a vector: the server stores the two as
+        different bin types, so a list here means the bin was written as a
+        list.
+
+        Returns:
+            The wrapped vector, or ``None`` when the value is ``None``.
+
+        Raises:
+            TypeError: When the wrapped value is non-``None`` and not a vector.
+
+        Example::
+
+            stream = await session.query(products.id("sku-42")).bin("embedding").get().execute()
+            record = (await stream.first_or_raise()).record_or_raise()
+            embedding = OperationResult(record.bins["embedding"]).get_vector()
+            dimensions = len(embedding)
+
+        See Also:
+            :meth:`get_list`: List accessor.
+            :meth:`value`: Raw access without coercion.
+        """
+        v = self._value
+        if v is None:
+            return None
+        if isinstance(v, Vector):
+            return v
+        raise TypeError(f"OperationResult value is {type(v).__name__}, not Vector")
 
     def __repr__(self) -> str:
         return f"OperationResult({self._value!r})"

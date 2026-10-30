@@ -72,6 +72,7 @@ from aerospike_sdk.exceptions import (
     PncServerError,
     PncTimeoutError,
     PncUDFBadResponse,
+    PncValueError,
 )
 
 class TestExceptionHierarchy:
@@ -606,6 +607,23 @@ class TestResultCodeGuidance:
         exc = _convert_pnc_exception(pnc)
         assert exc.result_code == ResultCode.PARAMETER_ERROR
         assert "error_detail_verbosity" in exc.hint
+
+    def test_client_side_parameter_error_carries_no_server_hint(self):
+        # The client refused the argument itself; no server holds a reason,
+        # so pointing at the server's verbosity setting would misdirect.
+        pnc = PncValueError("Error 4: Invalid argument: vector must have at least 1 dimension")
+        pnc.result_code = ResultCode.PARAMETER_ERROR
+        exc = _convert_pnc_exception(pnc)
+        assert type(exc) is AerospikeError
+        assert exc.result_code == ResultCode.PARAMETER_ERROR
+        assert exc.hint is None
+        assert str(exc) == "Error 4: Invalid argument: vector must have at least 1 dimension"
+
+    def test_client_side_failure_keeps_an_explicit_hint(self):
+        pnc = PncValueError("Error 4: Invalid argument: bad k")
+        pnc.result_code = ResultCode.PARAMETER_ERROR
+        exc = _convert_pnc_exception(pnc, hint="top_k(k) takes 1 to 1000")
+        assert exc.hint == "top_k(k) takes 1 to 1000"
 
     def test_codes_without_guidance_carry_no_hint(self):
         # Guidance that restates the code name is noise; most codes get none.

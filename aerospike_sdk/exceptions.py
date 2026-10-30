@@ -867,6 +867,7 @@ def _result_code_to_exception(
     sub_exceptions: tuple[AerospikeError, ...] = (),
     base_message: str | None = None,
     hint: str | None = None,
+    from_server: bool = True,
 ) -> AerospikeError:
     """Map a server result code to the appropriate typed exception.
 
@@ -874,6 +875,10 @@ def _result_code_to_exception(
     guidance is appended to *message* and kept on the exception as ``hint``. Pass
     ``hint`` explicitly to override the generic text with something narrower --
     a caller holding the operation knows more than the code alone conveys.
+
+    Pass ``from_server=False`` for a code the client assigned itself. The
+    per-code guidance describes server-side conditions, so a client-side
+    failure carries only an explicit ``hint``.
     """
     cls = _RC_TO_TYPE.get(result_code, AerospikeError)
     # A row-level failure arrives as a bare code; the code's descriptive string
@@ -883,7 +888,7 @@ def _result_code_to_exception(
         message = result_code.description
     if base_message is None:
         base_message = result_code.description
-    if hint is not None:
+    if hint is not None or not from_server:
         guidance: str | None = hint
     elif sub_code:
         # A subcode names the exact condition, so it beats the per-code text.
@@ -1025,6 +1030,7 @@ def _convert_pnc_exception(exc: Exception, *, hint: str | None = None) -> Aerosp
         if code is not None:
             return _result_code_to_exception(
                 code, str(exc), getattr(exc, "in_doubt", False),
+                hint=hint, from_server=False,
                 **_retry_context_kwargs(exc),
             )
         # A client-side failure that names no condition (a CA file that

@@ -31,10 +31,12 @@ class _FakeVersion:
         *,
         ael: bool = True,
         query_selection: bool = True,
+        top_k: bool = True,
         mrt: bool = True,
     ) -> None:
         self._ael = ael
         self._query_selection = query_selection
+        self._top_k = top_k
         self._mrt = mrt
 
     def supports_server_compiled_ael(self) -> bool:
@@ -42,6 +44,9 @@ class _FakeVersion:
 
     def supports_query_selection(self) -> bool:
         return self._query_selection
+
+    def supports_query_top_k(self) -> bool:
+        return self._top_k
 
     def supports_mrt(self) -> bool:
         return self._mrt
@@ -355,6 +360,40 @@ class TestTransactionGate:
     def test_a_reader_refreshes_when_connect_never_warmed(self):
         client = _Client(_FakePncClient(_FakeVersion()))
         assert client._supports_mrt() is True
+
+
+class TestTopKGate:
+    """The Top-K gate rides the same tend-interval cache as the other gates."""
+
+    def test_capable_nodes_open_the_gate(self):
+        client = _Client(_FakePncClient(_FakeVersion(), _FakeVersion()))
+        client._warm_routing_capabilities()
+        assert client.supports_query_top_k is True
+
+    def test_a_node_without_top_k_joining_closes_the_gate(self, clock):
+        pnc = _FakePncClient(_FakeVersion())
+        client = _Client(pnc, tend_interval=timedelta(seconds=1))
+        client._warm_routing_capabilities()
+        assert client.supports_query_top_k is True
+
+        pnc.join(_FakeVersion(top_k=False))
+        clock.advance(1.0)
+
+        assert client.supports_query_top_k is False
+
+    def test_unlistable_nodes_keep_the_gate_open(self):
+        """A ranked query has no fallback path; PNC refuses it on a node that cannot rank."""
+        proxy = _FakeThreadLocalProxy()
+        client = _Client(proxy)
+        client._warm_routing_capabilities()
+        assert client.supports_query_top_k is True
+        assert proxy.attribute_misses == []
+
+    def test_disconnected_client_reports_no_top_k(self):
+        client = _Client(_FakePncClient(_FakeVersion()))
+        client._warm_routing_capabilities()
+        client._connected = False
+        assert client.supports_query_top_k is False
 
 
 class TestRefreshUnderARunningLoop:

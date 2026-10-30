@@ -17,6 +17,7 @@
 
 from aerospike_native import (
     AuthMode,
+    BinDataType,
     BitPolicy,
     BitwiseOverflowActions,
     BitwiseResizeFlags,
@@ -41,6 +42,7 @@ from aerospike_native import (
     MapWriteFlags,
     SortedMap,
     ModifyFlags,
+    Order,
     QueryDuration,
     RegisterTask,
     ResultCode,
@@ -56,6 +58,9 @@ from aerospike_native import (
     TxnState,
     UDFLang,
     UdfRemoveTask,
+    Vector,
+    VectorDistanceMetric,
+    VectorElementType,
     Version,
 )
 
@@ -127,6 +132,7 @@ __all__ = [
     "BitWriteFlags",
     "BackoffError",
     "BatchError",
+    "BinDataType",
     "BinError",
     "BinExistsError",
     "BinNotFoundError",
@@ -177,6 +183,7 @@ __all__ = [
     "ModifyFlags",
     "Node",
     "OperationResult",
+    "Order",
     "QueryDuration",
     "QueryHint",
     "QueryError",
@@ -211,6 +218,9 @@ __all__ = [
     "TxnStatus",
     "UDFLang",
     "UdfRemoveTask",
+    "Vector",
+    "VectorDistanceMetric",
+    "VectorElementType",
     "Version",
     "map_keys",
     "map_values",
