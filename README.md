@@ -39,6 +39,7 @@ for the surfaces this SDK does not yet wrap - see Known traps.
 | AEL filters, expressions | `docs/guide/expression-ael.md` | filter grammar and limits |
 | String operations | `docs/guide/string-ops.md` | server-side string ops |
 | Secondary indexes | `docs/guide/indexes.md` | index create and query |
+| Vectors, Top-K queries | `docs/guide/vectors.md` | vector bins, distances, ranking |
 | Transactions | `docs/guide/transactions.md` | multi-record semantics |
 | Errors, result handling | `docs/guide/error-handling.md` | error strategy, RecordResult |
 | Background ops, UDFs | `docs/guide/background-udf.md` | background execution |
@@ -63,14 +64,14 @@ aerospike-client-python-sdk/
 |   |__ dataset.py, exp.py, record_stream.py, record_result.py,
 |       error_strategy.py, exceptions.py, operation_result.py, ...
 |__ docs/
-|   |__ guide/            15 hand-written guides - start here
+|   |__ guide/            16 hand-written guides - start here
 |   |__ api/              Sphinx autodoc stubs, one per class (+ sync/ mirror)
 |   |__ conf.py           Sphinx config; Read the Docs builds from this
-|__ examples/             25 runnable programs
+|__ examples/             26 runnable programs
 |__ tests/
 |   |__ README.md         which suite is authoritative for what
-|   |__ unit/             77 files - no server required
-|   |__ integration/      104 files - needs a running server
+|   |__ unit/             87 files - no server required
+|   |__ integration/      115 files - needs a running server
 |__ benchmarks/
 |__ Makefile              test, test-unit, test-int, coverage, docs targets
 ```

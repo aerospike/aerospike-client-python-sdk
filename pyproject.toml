@@ -67,6 +67,8 @@ addopts = "-s"
 markers = [
     "requires_server_compiled_ael(host='aerospike_host'): needs a seed cluster with server-compiled AEL (see tests/integration/conftest.py)",
     "requires_query_selection(host='aerospike_host'): needs a seed cluster with field 44 query selection (see tests/integration/conftest.py)",
+    "requires_vector(host='aerospike_host'): needs a seed cluster that stores vector bins (see tests/integration/conftest.py)",
+    "requires_query_top_k(host='aerospike_host'): needs a seed cluster that ranks queries by order keys (see tests/integration/conftest.py)",
 ]
 testpaths = ["tests"]
 python_files = ["*_test.py"]

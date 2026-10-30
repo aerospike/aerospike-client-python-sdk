@@ -1082,6 +1082,37 @@ class ClusterBase(Generic[_S, _TS, _N]):
         return capabilities.supports_query_selection(
             self._sdk_client._cluster_versions())
 
+    def supports_vector(self) -> bool:
+        """Whether every node stores vector bins and evaluates vector expressions.
+
+        Example::
+
+            if cluster.supports_vector():
+                await session.upsert(key).put({"embedding": Vector([0.1, 0.7])}).execute()
+
+        See Also:
+            :meth:`supports_query_top_k`: Ranked queries over vector distance.
+        """
+        return capabilities.supports_vector(self._sdk_client._cluster_versions())
+
+    def supports_query_top_k(self) -> bool:
+        """Whether every node ranks a query by order keys (Top-K).
+
+        Example::
+
+            if cluster.supports_query_top_k():
+                stream = await (
+                    session.query(products)
+                        .order_by("price", BinDataType.DOUBLE, Order.ASC)
+                        .top_k(10)
+                        .execute()
+                )
+
+        See Also:
+            :meth:`supports_vector`: Vector bins and distance expressions.
+        """
+        return capabilities.supports_query_top_k(self._sdk_client._cluster_versions())
+
     # -- Metrics snapshot -------------------------------------------------------
     # The core assembles the snapshot from in-memory per-node state: no socket
     # is touched, so this is a plain call on both surfaces. PNC releases the

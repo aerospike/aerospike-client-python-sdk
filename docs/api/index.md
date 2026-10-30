@@ -71,6 +71,7 @@ Shared types used by both async and sync APIs.
 | [`ErrorDetailVerbosity`](error-detail-verbosity.md) | How much server error detail to request: subcode, message, expression trace |
 | [`ExpressionTrace`](expression-trace.md) | Structured expression build trace on `AerospikeError` (verbosity 3) |
 | [`QueryHint`](query-hint.md) | Query optimization hints |
+| [`Vector`, `BinDataType`, `Order`](vector.md) | Vector bin values, distance metrics, and Top-K order key types |
 | [`Metrics`](metrics.md) | Metrics policy, snapshot, and derived latency views |
 | [`SdkLoggers`](loggers.md) | Stable logger names for operator tuning |
 
@@ -135,6 +136,7 @@ expression-trace
 exceptions
 result-code
 query-hint
+vector
 metrics
 loggers
 exp

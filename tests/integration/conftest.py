@@ -24,12 +24,16 @@ import pytest
 
 from tests.pnc_compat import (
     skip_if_lacks_query_selection,
+    skip_if_lacks_query_top_k,
     skip_if_lacks_server_compiled_ael,
+    skip_if_lacks_vector,
 )
 
 _CAPABILITY_MARKERS = (
     ("requires_server_compiled_ael", skip_if_lacks_server_compiled_ael),
     ("requires_query_selection", skip_if_lacks_query_selection),
+    ("requires_vector", skip_if_lacks_vector),
+    ("requires_query_top_k", skip_if_lacks_query_top_k),
 )
 
 # Seed fixtures a capability marker may name with ``host=``, mapped to whether
@@ -41,6 +45,8 @@ _PROBE_SEEDS = {"aerospike_host": False, "aerospike_host_sc": True}
 class _ClusterCapabilities:
     supports_server_compiled_ael: bool
     supports_query_selection: bool
+    supports_vector: bool
+    supports_query_top_k: bool
 
 
 @pytest.fixture(scope="session")
@@ -55,6 +61,8 @@ def cluster_capabilities(make_cluster_definition) -> Callable[[str, bool], _Clus
                 capabilities = cache[seed] = _ClusterCapabilities(
                     supports_server_compiled_ael=cluster.supports_ael(),
                     supports_query_selection=cluster.supports_query_selection(),
+                    supports_vector=cluster.supports_vector(),
+                    supports_query_top_k=cluster.supports_query_top_k(),
                 )
         return capabilities
 

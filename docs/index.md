@@ -163,6 +163,7 @@ guide/string-ops
 
 guide/expression-ael
 guide/indexes
+guide/vectors
 ```
 
 ```{toctree}

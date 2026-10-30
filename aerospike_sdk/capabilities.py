@@ -65,6 +65,16 @@ def supports_query_selection(versions: List[Any]) -> bool:
     return bool(versions) and all(v.supports_query_selection() for v in versions)
 
 
+def supports_vector(versions: List[Any]) -> bool:
+    """Whether every node stores vector bins and evaluates vector expressions."""
+    return bool(versions) and all(v.supports_vector() for v in versions)
+
+
+def supports_query_top_k(versions: List[Any]) -> bool:
+    """Whether every node ranks a query by order keys (Top-K)."""
+    return bool(versions) and all(v.supports_query_top_k() for v in versions)
+
+
 def supports_mrt(versions: List[Any]) -> bool:
     """Whether every node supports multi-record transactions."""
     return bool(versions) and all(v.supports_mrt() for v in versions)
