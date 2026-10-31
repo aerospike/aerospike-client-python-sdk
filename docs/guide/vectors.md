@@ -34,6 +34,11 @@ The element type defaults to `VectorElementType.FLOAT32`. The others are
 Vector([3, -1, 7], VectorElementType.INT32)
 ```
 
+A vector has at least one element, and every float in it is finite.
+`Vector` raises `ValueError` for an empty sequence, a NaN or an infinity,
+and for more elements than the server stores (256 KiB of element data, so
+65,536 `FLOAT32` values).
+
 A list of floats is a list, not a vector: the server stores the two as
 different bin types, and only a vector bin works with the distance
 expressions below. A vector must be a top-level bin value. The server

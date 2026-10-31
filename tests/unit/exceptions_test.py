@@ -75,6 +75,28 @@ from aerospike_sdk.exceptions import (
     PncValueError,
 )
 
+
+class TestReExportedConstructorErrors:
+    """A type the SDK re-exports from its dependency validates in its own
+    constructor, where no SDK call wraps the error. Its rejections must be the
+    built-in ``ValueError`` so callers never meet the dependency's own types."""
+
+    @pytest.mark.parametrize(
+        "build",
+        [
+            lambda: aerospike_sdk.Vector([]),
+            lambda: aerospike_sdk.Vector([1.0, float("nan")]),
+            lambda: aerospike_sdk.Vector([0.0] * 65537),
+            lambda: aerospike_sdk.Vector.from_wire_bytes(b"\x01\x03"),
+        ],
+        ids=["empty", "nan", "oversized", "malformed-bytes"],
+    )
+    def test_vector_rejection_is_a_builtin_value_error(self, build):
+        with pytest.raises(ValueError) as exc_info:
+            build()
+        assert not isinstance(exc_info.value, PncAerospikeError)
+
+
 class TestExceptionHierarchy:
     """Verify the inheritance tree matches the design."""
 
