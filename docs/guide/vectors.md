@@ -123,7 +123,9 @@ The rules for order keys:
 
 - The key names a bin of the returned record: one listed in `bins()`, or
   one a `.bin(...)` read returns, like the `similarity` bin above.
-- `data_type` is `BinDataType.INTEGER` or `BinDataType.DOUBLE`.
+- `data_type` is `BinDataType.INTEGER`, `BinDataType.DOUBLE`, or
+  `BinDataType.BYTES`. Bytes compare as unsigned bytes, and a value ranks
+  before any longer value it is a prefix of.
 - A record whose key bin is missing, or holds another type, ranks last in
   either direction. That includes a record whose projected distance is
   unknown.

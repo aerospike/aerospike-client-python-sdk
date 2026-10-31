@@ -37,13 +37,15 @@ _DS = DataSet.of(general_namespace(), "vector_top_k")
 _PROBE = Vector([1.0, 0.0])
 # Record i points at angle i/10 from the probe and costs 10 * (12 - i), so the
 # most similar record is also the most expensive one. Four records share each
-# tier, so ranking on tier alone ties.
+# tier, so ranking on tier alone ties. Each odd record's sku extends the one
+# before it by a zero byte, so the even record's sku is a prefix of it.
 _PRODUCTS = {
     i: {
         "embedding": Vector([1.0, i / 10]),
         "category": "shoes" if i % 2 else "hats",
         "price": 10.0 * (12 - i),
         "tier": i // 4,
+        "sku": bytes([i // 2]) + b"\x00" * (i % 2),
     }
     for i in range(12)
 }
@@ -137,6 +139,15 @@ class TestTopK:
         )
         rows = [row.record_or_raise().bins async for row in stream]
         assert [(r["tier"], r["price"]) for r in rows] == [(2, 10.0), (2, 20.0), (2, 30.0)]
+
+    async def test_bytes_key_ranks_a_prefix_first(self, session):
+        stream = await (
+            session.query(_DS)
+            .order_by("sku", BinDataType.BYTES, Order.ASC)
+            .top_k(3)
+            .execute()
+        )
+        assert await _bins(stream, "sku") == [b"\x00", b"\x00\x00", b"\x01"]
 
     @pytest.mark.parametrize("order", [Order.ASC, Order.DESC], ids=["asc", "desc"])
     async def test_record_missing_the_key_ranks_last(self, session, order):

@@ -1225,8 +1225,8 @@ class _QueryBuilderBase:
 
         Args:
             bin_name: Bin of the returned record to rank by.
-            data_type: The key's type, :attr:`BinDataType.INTEGER` or
-                :attr:`BinDataType.DOUBLE`.
+            data_type: The key's type, :attr:`BinDataType.INTEGER`,
+                :attr:`BinDataType.DOUBLE` or :attr:`BinDataType.BYTES`.
             order: :attr:`Order.ASC` for smallest first, :attr:`Order.DESC`
                 for largest first.
 
@@ -1265,8 +1265,8 @@ class _QueryBuilderBase:
 
         Args:
             bin_name: Bin of the returned record to rank by.
-            data_type: The key's type, :attr:`BinDataType.INTEGER` or
-                :attr:`BinDataType.DOUBLE`.
+            data_type: The key's type, :attr:`BinDataType.INTEGER`,
+                :attr:`BinDataType.DOUBLE` or :attr:`BinDataType.BYTES`.
             order: :attr:`Order.ASC` or :attr:`Order.DESC`.
 
         Returns:
