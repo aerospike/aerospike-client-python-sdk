@@ -57,6 +57,10 @@ direction for "nearest":
 | `VectorDistanceMetric.COSINE_SIMILARITY` | largest | `Order.DESC` |
 | `VectorDistanceMetric.DOT_PRODUCT` | largest | `Order.DESC` |
 
+Each metric's `nearest_order` holds its "Rank with" value, so code that
+takes the metric as a parameter can rank with
+`.order_by("distance", BinDataType.DOUBLE, metric.nearest_order)`.
+
 A stored value that is not a vector, or whose element type or dimension
 count differs from `query`, evaluates to unknown. As a filter, the record
 does not match:
