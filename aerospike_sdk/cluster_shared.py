@@ -27,11 +27,20 @@ from __future__ import annotations
 import os
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Generic, List, Optional, TypeVar, Union
+from datetime import timedelta
+from typing import Any, Generic, List, Optional, TypeVar, Union, get_args
 
 from typing import Self
 
-from aerospike_native import AuthMode, ClientPolicy, ResultCode, TlsConfig, Version
+from aerospike_native import (
+    AuthMode,
+    ClientPolicy,
+    ResultCode,
+    SeedMergePolicy,
+    TlsConfig,
+    TranslationMissMode,
+    Version,
+)
 from aerospike_native import Host as PncHost
 
 from aerospike_sdk import capabilities
@@ -42,7 +51,19 @@ from aerospike_sdk.metrics.snapshot import ProcessSampler
 from aerospike_sdk.metrics.usage import COMMAND_COUNT
 from aerospike_sdk.node_shared import NodeBase
 from aerospike_sdk.policy.behavior import Behavior
+from aerospike_sdk.policy.discovery_settings import (
+    AddressTranslator,
+    DiscoveryExecutionMode,
+    DiscoverySettings,
+    SeedProvider,
+    TranslationSettings,
+    check_execution_mode,
+)
+from aerospike_sdk.policy.sdk_config_loader import merge_settings
 from aerospike_sdk.policy.system_settings import SystemSettings
+
+_SEED_PROVIDER_TYPES = get_args(SeedProvider)
+_TRANSLATOR_TYPES = get_args(AddressTranslator)
 
 # Client identifier sent to the server (user-agent), overriding the underlying
 # async client's own id so PSDK usage is distinguishable on the wire.
@@ -307,6 +328,8 @@ class ClusterDefinitionBase:
         self._ip_map: Optional[dict[str, str]] = None
         self._tls: Optional[_TlsSettings] = None
         self._system_settings: Optional[SystemSettings] = None
+        self._discovery: Optional[DiscoverySettings] = None
+        self._translation: Optional[TranslationSettings] = None
         self._app_id: Optional[str] = None
 
     # -- Builder chain (pure state mutation) ----------------------------------
@@ -671,6 +694,138 @@ class ClusterDefinitionBase:
         self._ip_map = ip_map if ip_map else None
         return self
 
+    def with_seed_discovery(
+        self,
+        provider: SeedProvider,
+        *,
+        merge_policy: Optional[SeedMergePolicy] = None,
+        execution_mode: Optional[DiscoveryExecutionMode] = None,
+        refresh_interval: Optional[timedelta] = None,
+        refresh_timeout: Optional[timedelta] = None,
+        tend_refresh_deadline: Optional[timedelta] = None,
+    ) -> Self:
+        """Find seed hosts with *provider*, at connect and periodically after.
+
+        The provider's hosts combine with the ones this definition was created
+        with, per *merge_policy*; create the definition with ``hosts=[]`` to
+        rely on the provider alone. A refresh that fails or returns nothing
+        keeps the last good set, so a discovery outage never empties a running
+        client's seeds. When the provider fails at connect and no seed is left
+        to try, ``connect()`` raises
+        :class:`~aerospike_sdk.exceptions.SeedDiscoveryError`. Each call
+        replaces any earlier discovery settings on
+        this definition; a ``system.<cluster>.discovery`` block in the SDK
+        config file layers over them field by field. See the
+        :doc:`/guide/discovery` guide.
+
+        Args:
+            provider: A :class:`~aerospike_native.StaticSeedCandidateProvider`,
+                :class:`~aerospike_native.DnsSeedCandidateProvider`,
+                :class:`~aerospike_native.AwsEc2TagSeedCandidateProvider`, or an
+                instance of a :class:`~aerospike_native.SeedCandidateProvider`
+                subclass.
+            merge_policy: How the provider's hosts combine with this
+                definition's. ``MERGE`` (the default) tries this definition's
+                first, then the provider's; ``REPLACE`` lets each refresh
+                replace the list after connect; ``DISCOVERY_ONLY`` uses the
+                provider's alone, falling back to this definition's whenever
+                the provider returns none.
+            execution_mode: Checked, not chosen: each provider runs in one
+                mode in this client (see :class:`DiscoveryExecutionMode`).
+                ``None`` takes the provider's own.
+            refresh_interval: Time between periodic refreshes. Default 30
+                seconds; at least the tend interval.
+            refresh_timeout: Time one refresh of a
+                :class:`~aerospike_native.SeedCandidateProvider` subclass may
+                take before its result is discarded. Default 10 seconds.
+            tend_refresh_deadline: Time one refresh on the cluster tend task
+                may take. Default 100 ms; at most half the tend interval.
+
+        Returns:
+            This ClusterDefinition for method chaining.
+
+        Raises:
+            AerospikeError: With ``PARAMETER_ERROR``, if *execution_mode* is
+                not the mode *provider* runs in.
+            TypeError: If *provider* is not a seed candidate provider.
+            ValueError: If a duration is not positive.
+
+        Example::
+
+            cd = ClusterDefinition(hosts=[]).with_seed_discovery(
+                DnsSeedCandidateProvider(["_aerospike._tcp.prod.example.com"],
+                                         record_type=DnsRecordType.SRV),
+            )
+
+        See Also:
+            :meth:`with_address_translation`: Rewrites advertised node addresses.
+        """
+        if not isinstance(provider, _SEED_PROVIDER_TYPES):
+            raise TypeError(
+                f"provider must be a seed candidate provider, got {type(provider).__name__}"
+            )
+        mode = DiscoveryExecutionMode(execution_mode) if execution_mode is not None else None
+        check_execution_mode(provider, mode)
+        self._discovery = DiscoverySettings(
+            provider=provider,
+            merge_policy=merge_policy,
+            execution_mode=mode,
+            refresh_interval=refresh_interval,
+            refresh_timeout=refresh_timeout,
+            tend_refresh_deadline=tend_refresh_deadline,
+        )
+        return self
+
+    def with_address_translation(
+        self,
+        translator: Optional[AddressTranslator] = None,
+        *,
+        on_miss: Optional[TranslationMissMode] = None,
+    ) -> Self:
+        """Rewrite the addresses nodes advertise before connecting to them.
+
+        For clients outside the cluster's network (Kubernetes, NAT, a load
+        balancer per node), where the addresses nodes advertise to each other
+        are not routable. A *translator* replaces :meth:`ip_map`. Each call
+        replaces any earlier translation settings on this definition; a
+        ``system.<cluster>.translation`` block in the SDK config file layers
+        over them field by field. See the :doc:`/guide/discovery` guide.
+
+        Args:
+            translator: A :class:`~aerospike_native.StaticMapAddressTranslator`,
+                :class:`~aerospike_native.PortMapAddressTranslator` or
+                :class:`~aerospike_native.PassThroughAddressTranslator`.
+                ``None`` keeps :meth:`ip_map`.
+            on_miss: What happens to an address the translator has no mapping
+                for: ``PASS_THROUGH`` (the default) connects to it as
+                advertised, ``STRICT`` skips that node.
+
+        Returns:
+            This ClusterDefinition for method chaining.
+
+        Raises:
+            TypeError: If *translator* is not an address translator.
+
+        Example::
+
+            cd = ClusterDefinition("lb.example.com", 30000).with_address_translation(
+                PortMapAddressTranslator({
+                    "10.0.0.1:3000": "lb.example.com:30001",
+                    "10.0.0.2:3000": "lb.example.com:30002",
+                }),
+                on_miss=TranslationMissMode.STRICT,
+            )
+
+        See Also:
+            :meth:`using_services_alternate`: Lets the server advertise routable addresses.
+        """
+        if translator is not None and not isinstance(translator, _TRANSLATOR_TYPES):
+            raise TypeError(
+                f"translator must be an address translator, got {type(translator).__name__}"
+            )
+        self._translation = TranslationSettings(translator=translator, on_miss=on_miss)
+        return self
+
     def with_system_settings(self, settings: SystemSettings) -> Self:
         """Set cluster-wide system settings (connection pool, tend interval, etc.).
 
@@ -772,16 +927,26 @@ class ClusterDefinitionBase:
 
     # -- Connect-time assembly (shared) ---------------------------------------
 
+    def _programmatic_settings(self) -> Optional[SystemSettings]:
+        """The code layer: :meth:`with_system_settings`, with the discovery and
+        translation builders over it."""
+        if self._discovery is None and self._translation is None:
+            return self._system_settings
+        builders = SystemSettings(
+            discovery=self._discovery or DiscoverySettings(),
+            translation=self._translation or TranslationSettings(),
+        )
+        return merge_settings(builders, self._system_settings)
+
     def _get_policy(self, system_settings: Optional[SystemSettings] = None) -> ClientPolicy:
         """Build a ClientPolicy from the configuration.
 
         Args:
             system_settings: Effective settings to apply (the file layer merged
-                over :meth:`with_system_settings`). Defaults to the programmatic
-                settings alone.
+                over the code layer). Defaults to the code layer alone.
         """
         if system_settings is None:
-            system_settings = self._system_settings
+            system_settings = self._programmatic_settings()
         policy = ClientPolicy()
 
         # Override the underlying client's user-agent id with PSDK's own.

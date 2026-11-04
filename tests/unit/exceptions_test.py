@@ -22,6 +22,7 @@ from aerospike_native import Operation, SubCode
 from aerospike_native.exceptions import _RC_TO_CLS
 from aerospike_sdk.operations_shared import _SingleKeyWriteSegmentBase
 from aerospike_sdk.exceptions import (
+    AddressTranslationError,
     AerospikeError,
     AuthenticationError,
     AuthorizationError,
@@ -56,6 +57,7 @@ from aerospike_sdk.exceptions import (
     ResultCode,
     SecondaryIndexError,
     SecurityError,
+    SeedDiscoveryError,
     SerializationError,
     TimeoutError,
     TransactionError,
@@ -530,6 +532,17 @@ class TestSubsystemTypedMappings:
 
     def test_query_terminated_is_a_query_error(self):
         assert issubclass(QueryTerminatedError, QueryError)
+
+    def test_discovery_and_translation_are_connection_errors(self):
+        expected = {
+            ResultCode.SEED_DISCOVERY_FAILED: SeedDiscoveryError,
+            ResultCode.TRANSLATION_MISS: AddressTranslationError,
+            ResultCode.TRANSLATION_COLLISION: AddressTranslationError,
+        }
+        for code, cls in expected.items():
+            exc = _result_code_to_exception(code)
+            assert type(exc) is cls, code
+            assert isinstance(exc, ConnectionError), code
 
 
 class TestTypedCoverageMatchesDependency:

@@ -5,6 +5,7 @@ on:
     branches:
       - stage
       - main
+      - pluggable_discovery
   workflow_dispatch:
     inputs:
       all-pythons:

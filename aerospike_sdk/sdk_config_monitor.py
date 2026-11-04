@@ -41,12 +41,11 @@ from typing import Callable, Optional
 from aerospike_sdk.loggers import SdkLoggers
 from aerospike_sdk.policy.sdk_config_loader import (
     apply_behaviors,
-    fill_hard_defaults,
-    merge_settings,
     named_profiles,
     parse_config_bytes,
     read_config_bytes,
     resolve_for_cluster,
+    resolve_settings,
 )
 from aerospike_sdk.policy.system_settings import SystemSettings
 
@@ -73,6 +72,10 @@ class SdkConfigSource:
 # Everything in SystemSettings except these is read once, while building the
 # ClientPolicy that opens the connection, and cannot change on a live client.
 _LIVE_APPLIED_FIELDS = frozenset({"metrics"})
+
+# Groups that a reload reports, rather than swaps in, since the client they
+# would configure is already built.
+_RECONNECT_FIELDS = ("discovery", "translation")
 
 
 def adopt_discovered_cluster_name(
@@ -114,7 +117,7 @@ def adopt_discovered_cluster_name(
     if loaded is None:
         return settings, source
     file_layer = resolve_for_cluster(loaded.profiles, discovered)
-    adopted = fill_hard_defaults(merge_settings(file_layer, source.programmatic))
+    adopted = resolve_settings(file_layer, source.programmatic)
 
     spent = sorted(
         f.name
@@ -205,12 +208,27 @@ class _SdkConfigPoller:
         if loaded.behaviors:
             apply_behaviors(loaded.behaviors)
         file_layer = resolve_for_cluster(loaded.profiles, self._source.cluster_name)
-        resolved = fill_hard_defaults(merge_settings(file_layer, self._source.programmatic))
+        resolved = resolve_settings(file_layer, self._source.programmatic)
+        resolved = self._keep_connect_only(resolved)
         if resolved == self._current:
             return
         self._current = resolved
         self._apply(resolved)
         log.info("SDK config reloaded from %s", self._source.path)
+
+    def _keep_connect_only(self, resolved: SystemSettings) -> SystemSettings:
+        """Warn about, and undo, changes to groups only a reconnect applies."""
+        changed = [
+            name for name in _RECONNECT_FIELDS
+            if getattr(resolved, name) != getattr(self._current, name)
+        ]
+        if not changed:
+            return resolved
+        log.warning(
+            "SDK config: %s changed in %s; the change takes effect when the "
+            "client reconnects", ", ".join(changed), self._source.path,
+        )
+        return replace(resolved, **{name: getattr(self._current, name) for name in changed})
 
 
 class AsyncSdkConfigMonitor:

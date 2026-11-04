@@ -142,6 +142,7 @@ pip install -e ".[dev]"
 :caption: Getting Started
 
 guide/connecting
+guide/discovery
 guide/dynamic-sdk-config
 ```
 

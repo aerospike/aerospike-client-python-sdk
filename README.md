@@ -33,6 +33,7 @@ for the surfaces this SDK does not yet wrap - see Known traps.
 | Task | Read first | Authoritative for |
 |---|---|---|
 | Connecting, sessions, behaviors | `docs/guide/connecting.md` | client and session setup |
+| Seed discovery, address translation | `docs/guide/discovery.md` | DNS, AWS and custom providers; NAT and load balancers |
 | Reads, streams, fast-path | `docs/guide/reads.md` | read shapes |
 | Writes, verbs, TTL | `docs/guide/writes.md` | write verb semantics |
 | List and map operations | `docs/guide/cdt-operations.md` | CDT builder chain |
