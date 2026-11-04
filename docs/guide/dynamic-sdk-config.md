@@ -46,8 +46,9 @@ the servers report is read once the connection is up, and a block matching it
 is selected then.
 
 That second path arrives after the `ClientPolicy` has been built, so the
-`connections`, `circuit_breaker`, and `refresh` groups in such a block cannot
-take effect on the connection that is already open. Rather than apply half a
+`connections`, `circuit_breaker`, `refresh`, `discovery`, and `translation`
+groups in such a block cannot take effect on the connection that is already
+open. Rather than apply half a
 block quietly, the client applies the live-appliable half (`metrics`), leaves
 the rest at the values the connection was built with, and logs a warning
 naming exactly which settings were skipped and that
@@ -76,6 +77,11 @@ multi-key write batches on strong-consistency namespaces are wrapped in
 `20ms`) drive their retry loop on transient conflicts. See
 [`SystemSettings`](../api/system-settings.md) for the programmatic
 equivalents.
+
+The `discovery` and `translation` groups set where seeds come from and how
+advertised node addresses are rewritten. Their keys and validation are in
+[Seed Discovery and Address Translation](discovery.md), under "In the SDK
+config file".
 
 `wait_for_connection_to_complete` bounds how long the pool may spend
 establishing one connection (TCP connect, TLS, authentication). It is a
@@ -156,6 +162,9 @@ re-read, re-parsed, and applied without reconnecting.
   complete with whichever policy snapshot they started with.
 - **`connections.*` / `refresh.tend_interval`** — applied to the connection at
   `connect()`; a change to these takes effect on the next connect.
+- **`discovery.*` / `translation.*`** — also applied at `connect()`; a reload
+  that changes them logs a warning that the change takes effect when the
+  client reconnects.
 
 ## Fail-soft
 

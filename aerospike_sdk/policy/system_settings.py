@@ -23,6 +23,7 @@ from typing import Dict, Optional
 
 from aerospike_native import ClientPolicy
 
+from aerospike_sdk.policy.discovery_settings import DiscoverySettings, TranslationSettings
 from aerospike_sdk.metrics.export import (
     MIN_REPORT_SIZE_LIMIT as _MIN_REPORT_SIZE_LIMIT,
     MetricsExporterType,
@@ -205,6 +206,8 @@ class SystemSettings:
 
     See Also:
         :class:`TransactionSettings`: The SDK-runtime transaction group.
+        :class:`~aerospike_sdk.policy.discovery_settings.DiscoverySettings`: Seed discovery.
+        :class:`~aerospike_sdk.policy.discovery_settings.TranslationSettings`: Address translation.
         :meth:`~aerospike_sdk.aio.cluster_definition.ClusterDefinition.with_system_settings`
     """
 
@@ -220,13 +223,21 @@ class SystemSettings:
     max_errors_in_error_window: Optional[int] = None
     transactions: TransactionSettings = TransactionSettings()
     metrics: MetricsSettings = MetricsSettings()
+    discovery: DiscoverySettings = DiscoverySettings()
+    translation: TranslationSettings = TranslationSettings()
 
     def apply_to(self, policy: ClientPolicy) -> ClientPolicy:
         """Apply non-None fields to *policy*, returning the same object.
 
         The :attr:`transactions` group is SDK-runtime configuration and is
         deliberately not applied; it is read at operation time.
+
+        Raises:
+            AerospikeError: With ``PARAMETER_ERROR``, if the discovery
+                execution mode is not the one its provider runs in.
         """
+        self.discovery.apply_to(policy)
+        self.translation.apply_to(policy)
         if self.min_connections_per_node is not None:
             policy.min_conns_per_node = self.min_connections_per_node
         if self.max_connections_per_node is not None:

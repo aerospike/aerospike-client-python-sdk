@@ -65,6 +65,7 @@ Shared types used by both async and sync APIs.
 | [`Behavior`](behavior.md) | Policy presets (timeouts, consistency) |
 | [`ClusterDefinition`](cluster-definition.md) | Cluster connection configuration |
 | [`SystemSettings`](system-settings.md) | Global system-level tunables |
+| [Seed discovery, address translation](discovery.md) | Seed candidate providers, address translators, and their settings |
 | [`ErrorStrategy`](error-strategy.md) | Error handling strategies |
 | [`Exceptions`](exceptions.md) | Exception hierarchy |
 | [`ResultCode`](result-code.md) | Server and client result codes carried on every error and record result |
@@ -130,6 +131,7 @@ record-stream
 behavior
 cluster-definition
 system-settings
+discovery
 error-strategy
 error-detail-verbosity
 expression-trace

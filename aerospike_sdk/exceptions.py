@@ -203,6 +203,50 @@ class ConnectionError(AerospikeError):
     """
 
 
+class SeedDiscoveryError(ConnectionError):
+    """Raised when the seed candidate provider fails and no seed is left.
+
+    Raised by ``connect()`` when the provider fails and the cluster
+    definition has no hosts of its own to fall back to. A failed periodic
+    refresh on a running client keeps the last good seeds and is logged
+    instead.
+
+    Attributes:
+        result_code: ``ResultCode.SEED_DISCOVERY_FAILED``.
+
+    Example::
+
+        try:
+            cluster = await (
+                ClusterDefinition(hosts=[]).with_seed_discovery(provider).connect()
+            )
+        except SeedDiscoveryError:
+            ...  # the provider failed; the message carries its error
+    """
+
+
+class AddressTranslationError(ConnectionError):
+    """Raised when address translation cannot produce a usable node address.
+
+    The translator had no mapping for an advertised address while
+    ``on_miss`` is ``STRICT`` (``ResultCode.TRANSLATION_MISS``), or mapped
+    two nodes to the same address (``ResultCode.TRANSLATION_COLLISION``).
+    The client skips such a node and logs why, so this surfaces only where a
+    caller is handed the failure itself.
+
+    Attributes:
+        result_code: ``ResultCode.TRANSLATION_MISS`` or
+            ``ResultCode.TRANSLATION_COLLISION``.
+
+    Example::
+
+        try:
+            ...
+        except AddressTranslationError as exc:
+            log.error("translator misconfigured: %s", exc)
+    """
+
+
 class InvalidNodeError(AerospikeError):
     """Raised when the chosen node is unknown, wrong role, or not usable.
 
@@ -688,6 +732,9 @@ _RC_TO_TYPE: dict[ResultCode, type[AerospikeError]] = {
     ResultCode.QUERY_TERMINATED: QueryTerminatedError,
     ResultCode.SERIALIZE_ERROR: SerializationError,
     ResultCode.GENERATION_ERROR: GenerationError,
+    ResultCode.SEED_DISCOVERY_FAILED: SeedDiscoveryError,
+    ResultCode.TRANSLATION_MISS: AddressTranslationError,
+    ResultCode.TRANSLATION_COLLISION: AddressTranslationError,
     # Authentication (identity / credential problems)
     ResultCode.NOT_AUTHENTICATED: AuthenticationError,
     ResultCode.INVALID_USER: AuthenticationError,

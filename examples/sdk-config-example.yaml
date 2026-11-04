@@ -92,6 +92,21 @@ system:
     transactions:
       sleep_between_attempts: 500ms
       number_of_attempts: 5
+    # Seed discovery and address translation, read at connect. Uncomment to
+    # find seeds through DNS SRV records and reach nodes through per-node
+    # load balancer ports. See docs/guide/discovery.md.
+    # discovery:
+    #   provider: dns
+    #   merge_policy: discovery_only
+    #   dns:
+    #     names: [_aerospike._tcp.prod.example.com]
+    #     record_type: srv
+    # translation:
+    #   provider: port-map
+    #   on_miss: strict
+    #   port_map:
+    #     "10.0.0.1:3000": "lb.example.com:30001"
+    #     "10.0.0.2:3000": "lb.example.com:30002"
 
   development:
     connections:

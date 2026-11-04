@@ -1,0 +1,84 @@
+name: Discovery conformance
+
+# L1: the shared aerospike-client-conformance fixture set, run through
+# tests/conformance/conformance_test.py. The fixture set is a public repository
+# checked out at a pinned commit; the report is checked against the fixtures
+# and tests/conformance/python-declared.yaml by the repository's own collector.
+
+on:
+  pull_request:
+    branches:
+      - stage
+      - main
+      - pluggable_discovery
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # OIDC token exchange with Artifactory (PNC wheel download).
+  id-token: write
+
+jobs:
+  l1:
+    name: L1 conformance
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout the conformance fixture set
+        uses: actions/checkout@v4
+        with:
+          repository: aerospike/aerospike-client-conformance
+          # main at VERSION 1.1.0, the version conformance_test.py pins;
+          # repin to the v1.1.0 tag once the fixture set is tagged.
+          ref: f66304f36d1cded608e4d6c199622266e2db1dc3
+          path: conformance
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: Setup JFrog CLI
+        id: jfrog
+        uses: step-security/setup-jfrog-cli@3054b554c0fb4915b3d58847fb7730c593dbb934 # v5.0.0
+        env:
+          JF_PROJECT: ${{ vars.JFROG_PROJECT }}
+        with:
+          oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
+          oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
+
+      - name: Install SDK and dev dependencies
+        env:
+          JF_OIDC_USER: ${{ steps.jfrog.outputs.oidc-user }}
+          JF_OIDC_TOKEN: ${{ steps.jfrog.outputs.oidc-token }}
+        run: |
+          set -euo pipefail
+          user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
+          pip install ".[dev]" --only-binary aerospike-native \
+            --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
+
+      # The dns and aws-tags rows run against the fixture server the set
+      # ships, which the runner starts with this job's Python.
+      - name: Run the conformance fixtures
+        env:
+          CONFORMANCE_DIR: ${{ github.workspace }}/conformance
+          CONFORMANCE_REPORT: ${{ github.workspace }}/build/conformance/conformance-report.json
+        run: python -m pytest tests/conformance -v
+
+      - name: Upload the conformance report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-report-python
+          path: build/conformance/conformance-report.json
+          if-no-files-found: warn
+
+      - name: Collect the conformance report
+        if: ${{ always() }}
+        uses: ./conformance/.github/actions/collect-conformance-report
+        with:
+          reports-directory: build/conformance
+          fixtures-directory: ${{ github.workspace }}/conformance
+          declarations-directory: tests/conformance
