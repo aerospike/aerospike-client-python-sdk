@@ -60,6 +60,10 @@ def _similarity() -> object:
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def session(aerospike_host, make_cluster_definition):
     async with make_cluster_definition(aerospike_host).connect() as cluster:
+        # A module fixture runs before the per-test marker check, and writing
+        # these records fails on a server without vectors, so it checks itself.
+        if not cluster.supports_vector():
+            pytest.skip("Requires vectors: Version.supports_vector on all nodes (Cluster.supports_vector()).")
         s = cluster.create_session()
         for i, bins in _PRODUCTS.items():
             await s.upsert(_DS.id(i)).put(bins).execute()
