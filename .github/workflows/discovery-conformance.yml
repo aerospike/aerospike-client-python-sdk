@@ -18,6 +18,9 @@ permissions:
   # OIDC token exchange with Artifactory (PNC wheel download).
   id-token: write
 
+env:
+  JF_URL: https://artifact.aerospike.io
+
 jobs:
   l1:
     name: L1 conformance
