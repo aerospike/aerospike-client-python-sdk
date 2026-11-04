@@ -2207,16 +2207,14 @@ class _QueryBuilderBase:
     def _plain_write_policy(self, spec: _OperationSpec, settings: Settings) -> WritePolicy:
         """The override-free ``WritePolicy`` for the spec's kind, built once per kind.
 
-        Durable delete is forced off on the plain policy: the delete-bearing
-        specs resolve it themselves and never take this policy.
+        Carries the behavior's durable-delete setting: every write sends the
+        flag, so a write that removes a record's last bin tombstones it the
+        same way a delete does. Only a per-call override or chain default
+        leaves this policy.
         """
         base = self._base_write_policy if spec.retryable else self._base_write_policy_nr
         if base is None:
-            base_settings = settings
-            if base_settings.durable_delete:
-                base_settings = Settings.merge(
-                    base_settings, Settings(durable_delete=False))
-            base = self._apply_txn(to_write_policy(base_settings))
+            base = self._apply_txn(to_write_policy(settings))
             if spec.retryable:
                 self._base_write_policy = base
             else:
@@ -2228,8 +2226,6 @@ class _QueryBuilderBase:
         op_type = spec.op_type or "upsert"
         rea = _OP_TYPE_TO_REA.get(op_type)
         settings = self._point_write_settings(spec)
-        applies_dd = op_type == "delete" or spec.contains_record_delete_op
-        effective_dd = self._effective_point_durable_delete(spec, settings)
 
         if (
             rea is None
@@ -2238,8 +2234,7 @@ class _QueryBuilderBase:
             and spec.ttl_seconds is None
             and spec.durable_delete is None
             and spec.durable_delete_command_default is None
-            and not spec.contains_record_delete_op
-            and not applies_dd
+            and op_type != "touch"
         ):
             return self._plain_write_policy(spec, settings)
         wp = self._apply_txn(to_write_policy(settings))
@@ -2252,10 +2247,7 @@ class _QueryBuilderBase:
             wp.generation = spec.generation
         if spec.ttl_seconds is not None:
             wp.expiration = _to_expiration(spec.ttl_seconds)
-        if applies_dd:
-            wp.durable_delete = effective_dd
-        else:
-            wp.durable_delete = False
+        wp.durable_delete = self._effective_point_durable_delete(spec, settings)
         return wp
 
     def _make_batch_write_policy(
@@ -2269,10 +2261,7 @@ class _QueryBuilderBase:
         durable-delete default to the row's namespace mode.
         """
         rea = _OP_TYPE_TO_REA.get(spec.op_type or "upsert")
-        eff = (
-            self._batch_write_effective_dd(spec, mode)
-            if spec.contains_record_delete_op else False
-        )
+        eff = self._batch_write_effective_dd(spec, mode)
         commit_level = self._batch_commit_level(mode, spec.retryable)
         send_key = self._batch_send_key(mode, spec.retryable)
         has_settings = (
@@ -2284,11 +2273,7 @@ class _QueryBuilderBase:
             or spec.durable_delete_command_default is not None
             or commit_level is not None
             or send_key
-            or (spec.contains_record_delete_op and (
-                eff
-                or spec.durable_delete is not None
-                or spec.durable_delete_command_default is not None
-            ))
+            or eff
         )
         if not has_settings:
             return None
@@ -2305,8 +2290,7 @@ class _QueryBuilderBase:
             bwp.expiration = _to_expiration(spec.ttl_seconds)
         if commit_level is not None:
             bwp.commit_level = commit_level
-        if spec.contains_record_delete_op:
-            bwp.durable_delete = eff
+        bwp.durable_delete = eff
         return bwp
 
     def _dataset_set_name(self) -> Optional[str]:
@@ -2904,10 +2888,7 @@ class _QueryBuilderBase:
     ) -> Optional[BatchWritePolicy]:
         op_type = spec.op_type or "upsert"
         rea = _OP_TYPE_TO_REA.get(op_type)
-        eff = (
-            self._batch_write_effective_dd(spec, mode)
-            if spec.contains_record_delete_op else False
-        )
+        eff = self._batch_write_effective_dd(spec, mode)
         commit_level = self._batch_commit_level(mode, spec.retryable)
         send_key = self._batch_send_key(mode, spec.retryable)
         has_settings = (
@@ -2919,11 +2900,7 @@ class _QueryBuilderBase:
             or spec.durable_delete_command_default is not None
             or commit_level is not None
             or send_key
-            or (spec.contains_record_delete_op and (
-                eff
-                or spec.durable_delete is not None
-                or spec.durable_delete_command_default is not None
-            ))
+            or eff
         )
         if not has_settings:
             return None
@@ -2940,8 +2917,7 @@ class _QueryBuilderBase:
             bwp.expiration = _to_expiration(spec.ttl_seconds)
         if commit_level is not None:
             bwp.commit_level = commit_level
-        if spec.contains_record_delete_op:
-            bwp.durable_delete = eff
+        bwp.durable_delete = eff
         return bwp
 
 

@@ -523,8 +523,6 @@ class _BackgroundOperationBuilderBase:
             records_per_second=self._records_per_second,
             retryable=self._retryable,
         )
-        if self._op_type is not _OpType.DELETE:
-            wp.durable_delete = False
         statement = dataset_statement(
             self._dataset.namespace,
             self._dataset.set_name,
@@ -597,8 +595,6 @@ class BackgroundOperationBuilder(_BackgroundOperationBuilderBase):
             records_per_second=self._records_per_second,
             retryable=self._retryable,
         )
-        if self._op_type is not _OpType.DELETE:
-            wp.durable_delete = False
         statement = dataset_statement(
             self._dataset.namespace,
             self._dataset.set_name,

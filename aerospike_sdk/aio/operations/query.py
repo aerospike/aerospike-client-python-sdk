@@ -691,7 +691,6 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
                     key, spec.operations,
                     policy=base,
                     record_exists_action=_OP_TYPE_TO_REA.get(op_type),
-                    durable_delete=False,
                     txn=self._txn,
                 )
             except Exception as e:
@@ -1180,17 +1179,12 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
         if on_error is not None:
             self._promote()
             return await self._qb.execute(on_error)  # type: ignore[union-attr]
-        # Durable-delete state requires the slow path: bypasses don't carry
-        # _dd_override / _dd_command_default through to the per-call policy,
-        # and SC namespaces require the right durable_delete flag (FailForbidden
-        # otherwise). A record-delete op counts as durable-delete state too —
-        # the fast operate below hardcodes durable_delete=False, which would
-        # stomp the SC policy's default. Promote and defer to
-        # QueryBuilder.execute().
+        # A per-call durable-delete override or chain default needs the slow
+        # path: the bypass hands PNC the cached policy as-is, and only
+        # QueryBuilder.execute() resolves those onto a per-call policy.
         if (
             self._dd_override is not None
             or self._dd_command_default is not None
-            or self._record_delete_in_fast_ops
         ):
             self._promote()
             return await self._qb.execute(on_error)  # type: ignore[union-attr]
@@ -1222,7 +1216,6 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                     policy=self._write_policy,
                     policy_sc=self._write_policy_sc,
                     record_exists_action=_OP_TYPE_TO_REA.get(op_type) if op_type else None,
-                    durable_delete=False,
                     txn=self._txn,
                 )
             except Exception as exc:
@@ -1297,7 +1290,6 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                     self._ops,
                     policy=cached_wp,
                     record_exists_action=_OP_TYPE_TO_REA.get(op_type) if op_type else None,
-                    durable_delete=False,
                     txn=self._txn,
                 )
             except Exception as exc:

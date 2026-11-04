@@ -174,17 +174,16 @@ class _PromotedSignal(Exception):
     """Raised by a stubbed ``_promote`` to prove the slow path was taken."""
 
 
-class TestSingleKeyRecordDeletePromotion:
-    """``delete_record()`` must force the segment off the single-key hot path.
+class TestSingleKeyRecordDeleteHotPath:
+    """``delete_record()`` stays on the single-key hot path.
 
-    The hot-path operate hands PNC an explicit ``durable_delete`` keyword,
-    which overrides whatever the mode-resolved policy carries — only the
-    promoted ``QueryBuilder`` path resolves the durable-delete default from
-    the namespace mode. A record-delete that stayed on the hot path would be
-    silently non-durable, which SC namespaces reject. That failure is only
-    observable against an SC cluster, so these tests pin the promotion itself:
-    a segment holding a record-delete op must reach ``_promote()`` without
-    ever calling the fast-path client entry.
+    The cached AP/SC policy pair already carries the behavior's durable-delete
+    setting, and the hot-path operate passes no ``durable_delete`` keyword, so
+    PNC applies the mode-resolved policy's flag as-is. Only a per-call
+    override or chain default needs the promoted ``QueryBuilder`` path, where
+    those resolve onto a per-call policy. The tests pin the keyword's absence:
+    an explicit ``durable_delete=False`` here would silently expunge on SC
+    namespaces, which reject it.
     """
 
     def test_delete_record_sets_flag_without_promoting(self):
@@ -197,16 +196,41 @@ class TestSingleKeyRecordDeletePromotion:
         assert seg._record_delete_in_fast_ops is True
         assert seg._qb is None  # promotion is deferred to execute()
 
-    async def test_async_execute_with_record_delete_promotes(self):
+    async def test_async_execute_with_record_delete_stays_on_hot_path(self):
+        client = MagicMock()
+        client.operate = AsyncMock()
+        seg = _SingleKeyWriteSegment(
+            client=client, key=_key(), op_type="upsert",
+            behavior=Behavior.DEFAULT,
+            write_policy=MagicMock(), write_policy_sc=MagicMock(),
+        )
+        seg.delete_record()
+        await seg.execute()
+        client.operate.assert_awaited_once()
+        assert "durable_delete" not in client.operate.await_args.kwargs
+        assert seg._qb is None
+
+    def test_sync_execute_with_record_delete_stays_on_hot_path(self):
+        client = MagicMock()
+        seg = _SyncSingleKeyWriteSegment(
+            client=client, key=_key(), op_type="upsert",
+            behavior=Behavior.DEFAULT,
+            write_policy=MagicMock(), write_policy_sc=MagicMock(),
+        )
+        seg.delete_record()
+        seg.execute()
+        client.operate_blocking.assert_called_once()
+        assert "durable_delete" not in client.operate_blocking.call_args.kwargs
+        assert seg._qb is None
+
+    async def test_async_execute_with_override_promotes(self):
         client = MagicMock()
         seg = _SingleKeyWriteSegment(
             client=client, key=_key(), op_type="upsert",
             behavior=Behavior.DEFAULT,
-            # Both cached policies set = hot-path eligible; the record-delete
-            # alone must force promotion.
             write_policy=MagicMock(), write_policy_sc=MagicMock(),
         )
-        seg.delete_record()
+        seg.bin("a").set_to(1).with_durable_delete()
 
         def _signal() -> None:
             raise _PromotedSignal
@@ -216,14 +240,14 @@ class TestSingleKeyRecordDeletePromotion:
             await seg.execute()
         client.operate.assert_not_called()
 
-    def test_sync_execute_with_record_delete_promotes(self):
+    def test_sync_execute_with_override_promotes(self):
         client = MagicMock()
         seg = _SyncSingleKeyWriteSegment(
             client=client, key=_key(), op_type="upsert",
             behavior=Behavior.DEFAULT,
             write_policy=MagicMock(), write_policy_sc=MagicMock(),
         )
-        seg.delete_record()
+        seg.bin("a").set_to(1).with_durable_delete()
 
         def _signal() -> None:
             raise _PromotedSignal
