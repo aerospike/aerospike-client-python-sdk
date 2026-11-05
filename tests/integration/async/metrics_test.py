@@ -16,6 +16,7 @@ import asyncio
 import dataclasses
 import os
 import re
+import threading
 from datetime import timedelta
 
 import pytest
@@ -89,13 +90,8 @@ _SHAPE_SAFE = MetricsPolicy(
     latency_columns=24,
 )
 
-# The per-node connections block of the canonical snapshot: the gauges plus
-# every reason a connection was opened, refused, or closed.
-_NODE_CONNECTION_KEYS = {
-    "opened", "closed", "in_use", "in_pool",
-    "open_failure", "tls_handshake_failure", "auth_failure",
-    "closed_idle", "closed_error", "closed_node_removed", "pool_exhausted",
-}
+# The v1 per-node pool series intentionally has only these four fields.
+_NODE_CONNECTION_KEYS = {"opened", "closed", "in_use", "in_pool"}
 
 
 async def _do_some_ops(cluster, count):
@@ -131,8 +127,8 @@ class TestMetricsSnapshot:
 
         snapshot = metrics_cluster.metrics_snapshot()
         assert snapshot.total_nodes >= 1
-        conns = snapshot.to_canonical_dict()["cluster"]["connections"]
-        assert conns["in_use"] + conns["in_pool"] >= 1
+        nodes = snapshot.to_canonical_dict()["nodes"]
+        assert sum(n["connections"]["in_use"] + n["connections"]["in_pool"] for n in nodes) >= 1
         assert len(snapshot.nodes) == snapshot.total_nodes
 
         agg = snapshot.cluster_aggregated
@@ -251,8 +247,10 @@ class TestMetricsSnapshot:
             assert agg.command_histogram(CommandType.GET).count == 0
             assert agg.detailed_metric(general_namespace(), CommandType.GET) is None
             # The always-on tier is not gated with it.
-            conns = snapshot.to_canonical_dict()["cluster"]["connections"]
-            assert conns["in_use"] + conns["in_pool"] >= 1
+            nodes = snapshot.to_canonical_dict()["nodes"]
+            assert sum(
+                n["connections"]["in_use"] + n["connections"]["in_pool"] for n in nodes
+            ) >= 1
             assert snapshot.total_nodes >= 1
             # The per-call count is operational, so it stays at zero too.
             assert snapshot.command_count == 0
@@ -271,7 +269,12 @@ class TestMetricsSnapshot:
             session = cluster.create_session()
             key = DataSet.of(general_namespace(), "sdk_metrics_udf").id("k")
             await session.upsert(key).put({"n": 1}).execute()
-            await session.execute_udf(key).function("record_example", "readBin").passing("n").execute()
+            await (
+                session.execute_udf(key)
+                .function("record_example", "readBin")
+                .passing("n")
+                .execute()
+            )
             snapshot = cluster.metrics_snapshot()
             counts = snapshot.usage
             assert counts.get("feature.udf.record", 0) == 1, counts
@@ -358,7 +361,7 @@ class TestMetricsSnapshot:
             ns
             for node in document["nodes"]
             for ns in node["namespaces"]
-            if ns["name"] == general_namespace()
+            if ns["namespace"] == general_namespace()
         ]
         assert namespaces, "the namespace produced no canonical entry"
         bytes_in = sum(ns["bytes_in"] for ns in namespaces)
@@ -370,7 +373,7 @@ class TestMetricsExport:
     """Snapshots reaching an exporter, against a live cluster."""
 
     async def test_exporters_receive_pushed_snapshots(self, metrics_cluster):
-        """The timer pushes to every registered exporter without anyone calling metrics_snapshot()."""
+        """The timer pushes to every exporter without an application pull."""
         first, second = [], []
 
         class Recording:
@@ -378,7 +381,7 @@ class TestMetricsExport:
                 self._into = into
 
             async def export(self, snapshot):
-                self._into.append(snapshot)
+                self._into.append(snapshot.to_canonical_dict())
 
         a, b = Recording(first), Recording(second)
         metrics_cluster.add_exporter(a)
@@ -387,9 +390,9 @@ class TestMetricsExport:
             metrics_cluster.enable_metrics(_SHAPE_SAFE)
             # The configured interval is 30s; drive one push directly rather
             # than waiting for it.
-            await metrics_cluster._export_timer._export_once()
+            await asyncio.to_thread(metrics_cluster._export_timer._export_once)
             assert len(first) == 1 and len(second) == 1
-            doc = first[0].to_canonical_dict()
+            doc = first[0]
             assert doc["client_type"] == "python-sdk"
             assert doc["nodes_departed"] == []
         finally:
@@ -473,34 +476,34 @@ class TestMetricsExport:
             pytest.skip(f"cluster has {len(nodes)} node(s); needs 2+")
 
         # Identity is distinct per node, and the dict key cannot collide.
-        names = [n["name"] for n in nodes]
-        hosts = [f"{n['address']}:{n['port']}" for n in nodes]
+        names = [n["node_name"] for n in nodes]
+        hosts = [f"{n['node_address']}:{n['node_port']}" for n in nodes]
         assert len(set(names)) == len(names), f"duplicate node names: {names}"
         assert len(set(hosts)) == len(hosts), f"duplicate hosts: {hosts}"
 
         # Every node reports its own namespace block and its own connections.
         for node in nodes:
-            assert node["namespaces"], f"node {node['name']} has no namespace block"
+            assert node["namespaces"], f"node {node['node_name']} has no namespace block"
             assert set(node["connections"]) == _NODE_CONNECTION_KEYS
 
         # Work is spread, not attributed to one node: at least two nodes
         # recorded read latency. A view that aggregated would put it all on one.
         with_reads = [
-            n["name"]
+            n["node_name"]
             for n in nodes
             for ns in n["namespaces"]
-            if sum((ns.get("latency") or {}).get("read") or []) > 0
+            if sum(
+                item["count"]
+                for item in ns.get("latencies") or []
+                if item["type"] == "read"
+            ) > 0
         ]
         assert len(set(with_reads)) >= 2, (
             f"read latency recorded on {set(with_reads)} of {len(nodes)} nodes; "
             "per-node attribution looks collapsed"
         )
 
-        # Cluster totals agree with the per-node rows they summarize.
-        assert document["cluster"]["nodes"]["active"] == len(nodes)
-        cluster_conns = document["cluster"]["connections"]
-        assert cluster_conns["opened"] == sum(n["connections"]["opened"] for n in nodes)
-        assert cluster_conns["closed"] == sum(n["connections"]["closed"] for n in nodes)
+        assert document["total_nodes"] == len(nodes)
         multi_node_metrics_cluster.disable_metrics()
 
     async def test_node_departure_reaches_nodes_departed(self, metrics_cluster):
@@ -521,7 +524,7 @@ class TestMetricsExport:
 
         snapshot = metrics_cluster.metrics_snapshot()
         hosts = [
-            f"{n['address']}:{n['port']}"
+            f"{n['node_address']}:{n['node_port']}"
             for n in snapshot.to_canonical_dict().get("nodes", [])
         ]
         assert hosts, "snapshot reported no nodes; cannot test departure"
@@ -546,13 +549,17 @@ class TestMetricsExport:
 
             def metrics_snapshot(self):
                 real = self._real.metrics_snapshot()
-                return MetricsSnapshot(real._pnc, policy=real._policy, nodes=[])
+                snapshot = MetricsSnapshot(real._pnc, policy=real._policy, nodes=[])
+                return snapshot._with_departed(self._metrics_departure_tracker)
 
         timer = AsyncMetricsExportTimer(_EmptiedCluster(metrics_cluster), 3600.0)
 
-        await timer._export_once()
+        await asyncio.to_thread(timer._export_once)
         assert len(received) == 1
-        departed = [f"{n['address']}:{n['port']}" for n in received[0]["nodes_departed"]]
+        departed = [
+            f"{n['node_address']}:{n['node_port']}"
+            for n in received[0]["nodes_departed"]
+        ]
         assert sorted(departed) == sorted(hosts)
         # A departed node is no longer claimed as a member.
         assert received[0]["nodes"] == []
@@ -561,7 +568,7 @@ class TestMetricsExport:
         assert received[0]["nodes_departed"][0]["connections"]["opened"] >= 0
 
         # Reported once per host, not once per export tick.
-        await timer._export_once()
+        await asyncio.to_thread(timer._export_once)
         assert received[1]["nodes_departed"] == []
         metrics_cluster.disable_metrics()
 
@@ -595,10 +602,10 @@ class TestMetricsExport:
         assert re.match(stamp + r"header\(5\) ", header)
         assert "latency(MICROSECONDS,24,1)[" in header
         # name, type, version, app_id, labels, cpu, mem, recover queue,
-        # invalid nodes, command count, four usage counts, retries, nodes.
+        # invalid nodes, command count, retries, nodes.
         assert re.match(
             stamp + r"cluster\[[^,]*,python-sdk,[^,]+,[^,]+,\[(\[[^\]]*\],?)*\],"
-            r"[\d.]+,\d+,\d+,\d+,[1-9]\d*,\d+,\d+,\d+,\d+,\d+,\[\[",
+            r"[\d.]+,\d+,\d+,\d+,[1-9]\d*,\d+,\[\[",
             cluster_line,
         ), cluster_line
         namespace = re.search(
@@ -634,10 +641,10 @@ class TestCommandCount:
         assert after - base == 5
 
         doc = metrics_cluster.metrics_snapshot().to_canonical_dict()
-        assert doc["cluster"]["command_count"] == after
+        assert doc["command_count"] == after
         # Derived from the per-node counters the client core keeps.
-        assert doc["cluster"]["command_retries"] >= 0
-        assert "closed_idle" in doc["nodes"][0]["connections"]
+        assert doc["command_retries"] >= 0
+        assert set(doc["nodes"][0]["connections"]) == _NODE_CONNECTION_KEYS
         metrics_cluster.disable_metrics()
 
     async def test_disabled_metrics_freeze_the_count(self, metrics_cluster):
@@ -682,7 +689,7 @@ class TestFinalExport:
             base = metrics_cluster.metrics_snapshot().command_count
             await _do_some_ops(metrics_cluster, count=3)
             metrics_cluster.disable_metrics()
-            await metrics_cluster._final_export
+            await asyncio.wrap_future(metrics_cluster._final_export)
             assert exporter.counts == [base + 6]
         finally:
             metrics_cluster.remove_exporter(exporter)
@@ -707,15 +714,49 @@ class TestFinalExport:
             _with_metrics_settings(cluster, report_dir=str(tmp_path))
             cluster.enable_metrics(_SHAPE_SAFE)
             cluster.disable_metrics()
-            await cluster._final_export
+            await asyncio.wrap_future(cluster._final_export)
         (log,) = tmp_path.iterdir()
         lines = log.read_text().splitlines()
         assert len(lines) == 2 and " cluster[" in lines[1]
 
+    async def test_periodic_snapshot_is_built_on_the_metrics_thread(
+        self, aerospike_host, make_cluster_definition,
+    ):
+        """The live snapshot is taken on the metrics thread, not the application loop."""
+        threads = []
+        exporter = _CommandCounts()
+        definition = make_cluster_definition(aerospike_host).with_system_settings(_CUSTOM_EXPORT)
+        async with definition.connect() as cluster:
+            real = cluster.metrics_snapshot
+
+            def recording():
+                threads.append(threading.current_thread().name)
+                return real()
+
+            cluster.metrics_snapshot = recording
+            _with_metrics_settings(cluster, export_interval=timedelta(milliseconds=20))
+            cluster.add_exporter(exporter)
+            cluster.enable_metrics(_SHAPE_SAFE)
+            await _do_some_ops(cluster, count=3)
+            for _ in range(100):
+                if len(exporter.counts) >= 2:
+                    break
+                await asyncio.sleep(0.02)
+            cluster.disable_metrics()
+        assert len(exporter.counts) >= 2
+        # Periodic ticks run on the metrics thread. Disable takes the one
+        # closing snapshot on the caller, and that call can be recorded
+        # before a tick that was already in flight.
+        caller = threading.current_thread().name
+        assert threads.count(caller) == 1
+        assert set(threads) == {"aerospike-metrics-export", caller}
+
     async def test_enable_waits_for_a_pending_final_push(
         self, aerospike_host, make_cluster_definition,
     ):
-        release = asyncio.Event()
+        # The exporter runs on the metrics-owned loop, so the gate must not be
+        # an asyncio object bound to the test's loop.
+        release = threading.Event()
         calls = active = peak = 0
 
         class Gated:
@@ -725,7 +766,8 @@ class TestFinalExport:
                 active += 1
                 peak = max(peak, active)
                 try:
-                    await release.wait()
+                    while not release.is_set():
+                        await asyncio.sleep(0.005)
                 finally:
                     active -= 1
 

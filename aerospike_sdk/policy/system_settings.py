@@ -116,7 +116,8 @@ class MetricsSettings:
 
     Raises:
         ValueError: If ``exporter`` is not ``file``, ``custom`` or ``none``,
-            or ``report_size_limit`` is neither 0 nor at least 1,000,000.
+            an export duration or failure threshold is invalid, or
+            ``report_size_limit`` is neither 0 nor at least 1,000,000.
 
     See Also:
         :class:`~aerospike_sdk.metrics.MetricsPolicy`: The runtime policy these
@@ -128,6 +129,9 @@ class MetricsSettings:
     latency_columns: Optional[int] = None
     latency_shift: Optional[int] = None
     export_interval: Optional[timedelta] = None
+    export_timeout: Optional[timedelta] = None
+    max_consecutive_failures: Optional[int] = None
+    suspend_retry_interval: Optional[timedelta] = None
     exporter: Optional[MetricsExporterType] = None
     report_dir: Optional[str] = None
     report_size_limit: Optional[int] = None
@@ -147,6 +151,28 @@ class MetricsSettings:
                     f"metrics exporter must be one of {names}, got {self.exporter!r}"
                 ) from None
             object.__setattr__(self, "exporter", exporter)
+        interval = self.export_interval
+        if interval is not None and interval.total_seconds() <= 0:
+            raise ValueError(
+                f"metrics export_interval must be positive, got {interval}"
+            )
+        timeout = self.export_timeout
+        if timeout is not None and timeout.total_seconds() <= 0:
+            raise ValueError(
+                f"metrics export_timeout must be positive, got {timeout}"
+            )
+        failures = self.max_consecutive_failures
+        if failures is not None and failures <= 0:
+            raise ValueError(
+                "metrics max_consecutive_failures must be positive, "
+                f"got {failures}"
+            )
+        retry = self.suspend_retry_interval
+        if retry is not None and retry.total_seconds() < 0:
+            raise ValueError(
+                "metrics suspend_retry_interval must not be negative, "
+                f"got {retry}"
+            )
         limit = self.report_size_limit
         if limit and limit < _MIN_REPORT_SIZE_LIMIT:
             raise ValueError(

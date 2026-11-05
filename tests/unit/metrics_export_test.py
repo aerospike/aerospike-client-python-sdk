@@ -16,16 +16,21 @@
 """Unit tests for metrics export: fan-out, suspension, selection, the file exporter."""
 
 import asyncio
+from concurrent.futures import Future
+from datetime import timedelta
 import logging
 import re
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
 
+import aerospike_sdk.metrics.export as metrics_export
 from aerospike_sdk.cluster_shared import ClusterBase
 from aerospike_sdk.metrics.export import (
-    SUSPEND_AFTER_CONSECUTIVE_FAILURES,
-    SUSPENDED_RETRY_EVERY_INTERVALS,
+    DEFAULT_MAX_CONSECUTIVE_FAILURES,
+    DEFAULT_SUSPEND_RETRY_INTERVAL_SECONDS,
     AsyncMetricsExportTimer,
     MetricsWriter,
     MetricsExporterType,
@@ -58,8 +63,15 @@ class _StubSnapshot:
     def to_canonical_dict(self):
         return self._doc
 
-    def _mark_departed(self, tracker):
-        pass
+    def _with_departed(self, tracker):
+        return self
+
+    @property
+    def _departed_hosts(self):
+        return tuple(
+            f"{node['node_address']}:{node['node_port']}"
+            for node in self._doc.get("nodes_departed", ())
+        )
 
 
 class _StubCluster:
@@ -88,19 +100,28 @@ _DOC = {
     "latency_unit": "milliseconds",
     "latency_columns": 2,
     "latency_shift": 1,
-    "cluster": {"command_count": 57, "command_retries": 3},
+    "command_count": 57,
+    "command_retries": 3,
+    "cpu_percent": 0.0,
+    "memory_bytes": 0,
+    "recover_queue_size": 0,
+    "invalid_node_count": 0,
     "nodes": [
         {
-            "name": "BB9",
-            "address": "10.0.0.1",
-            "port": 3000,
+            "node_name": "BB9",
+            "node_address": "10.0.0.1",
+            "node_port": 3000,
             "connections": {"opened": 4, "closed": 1, "in_use": 1, "in_pool": 2},
+            "conn_latency": {"type": "conn", "bucket_counts": [5, 6]},
             "namespaces": [
                 {
-                    "name": "test",
-                    "errors": 2, "timeouts": 1, "key_busy": 0,
+                    "namespace": "test",
+                    "errors": 2, "server_timeouts": 1, "key_busy": 0,
                     "bytes_in": 10, "bytes_out": 20,
-                    "latency": {"read": [1, 2], "write": [3, 0], "conn": [5, 0]},
+                    "latencies": [
+                        {"type": "read", "bucket_counts": [1, 2]},
+                        {"type": "write", "bucket_counts": [3, 0]},
+                    ],
                 }
             ],
         }
@@ -148,6 +169,30 @@ class TestExportFanOut:
         timer._export_once()
         assert late.calls == ["export"]
 
+    def test_a_blocked_sync_exporter_times_out_and_the_next_runs(self):
+        release = threading.Event()
+        entered = threading.Event()
+        blocked_calls = []
+
+        class Blocked:
+            def export(self, snapshot):
+                blocked_calls.append(1)
+                entered.set()
+                release.wait()
+
+        good = _RecordingExporter("good")
+        settings = SimpleNamespace(export_timeout=timedelta(milliseconds=20))
+        cluster = _StubCluster([Blocked(), good])
+        timer = SyncMetricsExportTimer(cluster, 3600.0, settings)
+        try:
+            timer._export_once()
+            SyncMetricsExportTimer(cluster, 3600.0, settings)._export_once()
+            assert entered.is_set()
+            assert blocked_calls == [1], "a timed-out exporter must not be re-entered"
+            assert good.calls == ["export", "export"]
+        finally:
+            release.set()
+
 
 class TestExporterSuspension:
     """A persistently failing exporter is parked, retried, and can recover."""
@@ -160,36 +205,61 @@ class TestExporterSuspension:
         bad = _RecordingExporter("bad", raises=True)
         timer = SyncMetricsExportTimer(_StubCluster([bad]), 3600.0)
         with caplog.at_level(logging.WARNING):
-            self._run_cycles(timer, SUSPEND_AFTER_CONSECUTIVE_FAILURES + 2)
+            self._run_cycles(timer, DEFAULT_MAX_CONSECUTIVE_FAILURES + 2)
         # Called for each failure up to the threshold, then skipped.
-        assert len(bad.calls) == SUSPEND_AFTER_CONSECUTIVE_FAILURES
+        assert len(bad.calls) == DEFAULT_MAX_CONSECUTIVE_FAILURES
         assert "suspending" in caplog.text
 
-    def test_suspended_exporter_is_retried_periodically(self):
+    def test_suspended_exporter_is_retried_after_wall_clock_delay(self, monkeypatch):
+        now = [100.0]
+        monkeypatch.setattr(metrics_export.time, "monotonic", lambda: now[0])
         bad = _RecordingExporter("bad", raises=True)
         timer = SyncMetricsExportTimer(_StubCluster([bad]), 3600.0)
-        self._run_cycles(
-            timer, SUSPEND_AFTER_CONSECUTIVE_FAILURES + SUSPENDED_RETRY_EVERY_INTERVALS
-        )
-        assert len(bad.calls) == SUSPEND_AFTER_CONSECUTIVE_FAILURES + 1
+        self._run_cycles(timer, DEFAULT_MAX_CONSECUTIVE_FAILURES)
+        now[0] += DEFAULT_SUSPEND_RETRY_INTERVAL_SECONDS - 1
+        timer._export_once()
+        assert len(bad.calls) == DEFAULT_MAX_CONSECUTIVE_FAILURES
+        now[0] += 1
+        timer._export_once()
+        assert len(bad.calls) == DEFAULT_MAX_CONSECUTIVE_FAILURES + 1
 
-    def test_success_on_retry_resumes_the_normal_cadence(self, caplog):
+    def test_success_on_retry_resumes_the_normal_cadence(self, caplog, monkeypatch):
+        now = [100.0]
+        monkeypatch.setattr(metrics_export.time, "monotonic", lambda: now[0])
         bad = _RecordingExporter("bad", raises=True)
         timer = SyncMetricsExportTimer(_StubCluster([bad]), 3600.0)
-        self._run_cycles(timer, SUSPEND_AFTER_CONSECUTIVE_FAILURES)
+        self._run_cycles(timer, DEFAULT_MAX_CONSECUTIVE_FAILURES)
         bad.raises = False
+        now[0] += DEFAULT_SUSPEND_RETRY_INTERVAL_SECONDS
         with caplog.at_level(logging.INFO, logger="aerospike_sdk.behavior"):
-            self._run_cycles(timer, SUSPENDED_RETRY_EVERY_INTERVALS + 3)
+            self._run_cycles(timer, 4)
         # One successful retry, then every cycle again.
-        assert len(bad.calls) == SUSPEND_AFTER_CONSECUTIVE_FAILURES + 1 + 3
+        assert len(bad.calls) == DEFAULT_MAX_CONSECUTIVE_FAILURES + 1 + 3
         assert "recovered" in caplog.text
 
     def test_one_suspended_exporter_does_not_park_the_others(self):
         bad, good = _RecordingExporter("bad", raises=True), _RecordingExporter("good")
         timer = SyncMetricsExportTimer(_StubCluster([bad, good]), 3600.0)
-        cycles = SUSPEND_AFTER_CONSECUTIVE_FAILURES + 4
+        cycles = DEFAULT_MAX_CONSECUTIVE_FAILURES + 4
         self._run_cycles(timer, cycles)
         assert len(good.calls) == cycles
+
+    def test_threshold_and_retry_delay_are_configurable(self, monkeypatch):
+        now = [100.0]
+        monkeypatch.setattr(metrics_export.time, "monotonic", lambda: now[0])
+        bad = _RecordingExporter("bad", raises=True)
+        settings = SimpleNamespace(
+            max_consecutive_failures=1,
+            suspend_retry_interval=timedelta(seconds=5),
+        )
+        timer = SyncMetricsExportTimer(_StubCluster([bad]), 3600.0, settings)
+        timer._export_once()
+        now[0] += 4
+        timer._export_once()
+        assert len(bad.calls) == 1
+        now[0] += 1
+        timer._export_once()
+        assert len(bad.calls) == 2
 
     def test_a_single_failure_does_not_suspend(self):
         flaky = _RecordingExporter("flaky", raises=True)
@@ -200,23 +270,76 @@ class TestExporterSuspension:
         timer._export_once()
         assert len(flaky.calls) == 3
 
+    def test_busy_cycles_do_not_repeat_a_timeout_failure(self):
+        release = threading.Event()
+
+        class Blocked:
+            def export(self, snapshot):
+                release.wait()
+
+        exporter = Blocked()
+        settings = SimpleNamespace(
+            export_timeout=timedelta(milliseconds=10),
+            max_consecutive_failures=2,
+        )
+        timer = SyncMetricsExportTimer(_StubCluster([exporter]), 3600.0, settings)
+        try:
+            timer._export_once()
+            timer._export_once()
+            timer._export_once()
+            health = timer._state._health[id(exporter)]
+            assert health.failures == 1
+            assert health.suspended is False
+        finally:
+            release.set()
+
 
 class TestNodeCloseTracker:
     """Departure is judged against the live node list, never a snapshot diff."""
 
     def test_reports_a_host_missing_from_the_cluster(self):
         tracker = _NodeCloseTracker()
-        assert tracker.departed(["a:1", "b:2"], ["a:1"]) == ["b:2"]
+        assert tracker.peek(["a:1", "b:2"], ["a:1"]) == ["b:2"]
 
-    def test_fires_once_per_host(self):
+    def test_remains_pending_until_drain(self):
         tracker = _NodeCloseTracker()
-        tracker.departed(["a:1", "b:2"], ["a:1"])
-        assert tracker.departed(["a:1", "b:2"], ["a:1"]) == []
+        tracker.peek(["a:1", "b:2"], ["a:1"])
+        assert tracker.peek(["a:1", "b:2"], ["a:1"]) == ["b:2"]
+        tracker.drain(["b:2"])
+        assert tracker.peek(["a:1", "b:2"], ["a:1"]) == []
 
     def test_a_host_still_in_the_cluster_never_fires(self):
         """The snapshot keeps every host it ever saw, so only the live list shrinks."""
         tracker = _NodeCloseTracker()
-        assert tracker.departed(["a:1"], ["a:1"]) == []
+        assert tracker.peek(["a:1"], ["a:1"]) == []
+
+    def test_rejoin_then_depart_reports_a_new_final_sample(self):
+        tracker = _NodeCloseTracker()
+        assert tracker.peek(["a:1"], []) == ["a:1"]
+        tracker.drain(["a:1"])
+        assert tracker.peek(["a:1"], ["a:1"]) == []
+        assert tracker.peek(["a:1"], []) == ["a:1"]
+
+    def test_failed_delivery_retains_departure_until_success(self):
+        exporter = _RecordingExporter("flaky", raises=True)
+        departed = {
+            "node_name": "gone",
+            "node_address": "a",
+            "node_port": 1,
+            "connections": {},
+            "namespaces": [],
+        }
+        timer = SyncMetricsExportTimer(
+            _StubCluster([exporter], dict(_DOC, nodes_departed=[departed])),
+            3600.0,
+        )
+        tracker = timer._state.tracker
+        assert tracker.peek(["a:1"], []) == ["a:1"]
+        timer._export_once()
+        assert tracker.peek(["a:1"], []) == ["a:1"]
+        exporter.raises = False
+        timer._export_once()
+        assert tracker.peek(["a:1"], []) == []
 
 
 class TestMetricsWriter:
@@ -243,8 +366,7 @@ class TestMetricsWriter:
         assert header == (
             "header(5)"
             " cluster[cluster_name,client_type,client_version,app_id,labels[],cpu,mem,"
-            "recover_queue_size,nodes_invalid,command_count,blocking_count,deferred_count,"
-            "background_count,tran_count,command_retries,nodes[]]"
+            "recover_queue_size,nodes_invalid,command_count,command_retries,nodes[]]"
             " labels[name,value]"
             " nodes[name,address,port,conns_in_use,conns_in_pool,conns_opened,conns_closed,"
             "namespaces[]]"
@@ -255,32 +377,35 @@ class TestMetricsWriter:
     def test_cluster_line_is_positional_in_header_order(self, tmp_path):
         doc = dict(
             _DOC,
-            cluster={
-                "command_count": 57, "command_retries": 3,
-                "cpu_percent": 12.5, "memory_bytes": 1048576,
-                "recover_queue": {"size": 2}, "nodes": {"active": 1, "invalid": 1},
-            },
+            command_count=57, command_retries=3,
+            cpu_percent=12.5, memory_bytes=1048576,
+            recover_queue_size=2, invalid_node_count=1,
             usage={
-                "feature.api.blocking": 40, "feature.api.deferred": 7,
-                "feature.api.background": 2, "feature.transaction": 5,
-                "feature.shape.point": 900,
+                "blocking": 40, "deferred": 7, "background": 2,
+                "shape_point": 900,
             },
         )
         line = self._lines(tmp_path, doc)[1].split(" ", 2)[2]
         assert line == (
             "cluster[c1,python-sdk,9.9.9,billing,[[owner,platform]],12.5,1048576,2,1,"
-            "57,40,7,2,5,3,"
+            "57,3,"
             "[[BB9,10.0.0.1,3000,1,2,4,1,"
-            "[test,2,1,0,10,20,[conn[5,0],write[3,0],read[1,2],batch[0,0],query[0,0]]]]]]"
+            "[test,2,1,0,10,20,[conn[5,6],write[3,0],read[1,2],batch[0,0],query[0,0]]]]]]"
         )
 
-    def test_usage_columns_read_zero_when_usage_is_off(self, tmp_path):
-        line = self._lines(tmp_path)[1]
-        assert ",9.9.9,billing,[[owner,platform]],0.0,0,0,0,57,0,0,0,0,3,[" in line
-
-    def test_only_the_api_and_transaction_counters_reach_the_file(self, tmp_path):
-        """The other feature counters stay in the structured snapshot."""
-        text = "\n".join(self._lines(tmp_path, dict(_DOC, usage={"feature.shape.point": 900})))
+    def test_usage_counters_stay_in_the_structured_snapshot(self, tmp_path):
+        """No feature counter adds a field to the positional compatibility file."""
+        text = "\n".join(self._lines(tmp_path, dict(
+            _DOC,
+            usage={
+                "blocking": 901, "deferred": 902, "background": 903,
+                "shape_point": 904,
+            },
+        )))
+        assert "901" not in text
+        assert "902" not in text
+        assert "903" not in text
+        assert "904" not in text
         assert "900" not in text
         assert "feature." not in text
 
@@ -288,15 +413,16 @@ class TestMetricsWriter:
         line = self._lines(tmp_path, dict(_DOC, labels={}))[1]
         assert ",billing,[],0.0," in line
 
-    def test_departed_nodes_follow_the_live_ones_in_the_node_list(self, tmp_path):
+    def test_departed_nodes_are_written_as_final_node_lines(self, tmp_path):
         departed = {
-            "name": "BB8", "address": "10.0.0.9", "port": 3000,
+            "node_name": "BB8", "node_address": "10.0.0.9", "node_port": 3000,
             "connections": {"opened": 9, "closed": 9, "in_use": 0, "in_pool": 0},
             "namespaces": [],
         }
         lines = self._lines(tmp_path, dict(_DOC, nodes_departed=[departed]))
-        assert len(lines) == 2, "no separate line per departed node"
-        assert lines[1].endswith(",[BB8,10.0.0.9,3000,0,0,9,9,[]]]")
+        assert len(lines) == 3
+        assert "BB8" not in lines[1]
+        assert re.match(_STAMP + r"node\[BB8,10\.0\.0\.9,3000,0,0,9,9,\[\]\]$", lines[2])
 
     def test_field_names_are_snake_case(self, tmp_path):
         header = self._lines(tmp_path)[0]
@@ -333,6 +459,53 @@ class TestMetricsWriter:
         exporter.export(_StubSnapshot(_DOC))
         exporter.close()
         assert len(list(tmp_path.glob("metrics-*.log"))) == 2
+
+    def test_close_during_an_export_takes_effect_when_it_returns(self, tmp_path):
+        entered, release = threading.Event(), threading.Event()
+
+        class SlowWriter(MetricsWriter):
+            def _cluster_line(self, doc):
+                entered.set()
+                release.wait(2)
+                return super()._cluster_line(doc)
+
+        writer = SlowWriter(str(tmp_path))
+        exporting = threading.Thread(target=writer.export, args=(_StubSnapshot(_DOC),))
+        exporting.start()
+        assert entered.wait(1)
+        writer.close()
+        assert writer._file is not None, "close must not cut off the running export"
+        release.set()
+        exporting.join(2)
+        assert writer._file is None
+        lines = sorted(tmp_path.glob("metrics-*.log"))[0].read_text().splitlines()
+        assert len(lines) == 2 and re.match(_STAMP + r"cluster\[", lines[1])
+
+    def test_a_timed_out_export_finishes_its_line_before_the_file_closes(self, tmp_path):
+        """Disable stops waiting on timeout; the client-owned file still closes after the write."""
+        entered, release = threading.Event(), threading.Event()
+
+        class SlowWriter(MetricsWriter):
+            def _cluster_line(self, doc):
+                entered.set()
+                release.wait(2)
+                return super()._cluster_line(doc)
+
+        writer = SlowWriter(str(tmp_path))
+        settings = SimpleNamespace(export_timeout=timedelta(milliseconds=20))
+        timer = SyncMetricsExportTimer(_StubCluster([writer]), 3600.0, settings)
+        timer._export_once()
+        assert entered.is_set()
+        writer.close()
+        assert writer._file is not None
+        release.set()
+        for _ in range(200):
+            if writer._file is None:
+                break
+            time.sleep(0.005)
+        assert writer._file is None
+        lines = sorted(tmp_path.glob("metrics-*.log"))[0].read_text().splitlines()
+        assert len(lines) == 2
 
     def test_a_size_limit_under_the_minimum_is_rejected(self, tmp_path):
         with pytest.raises(ValueError, match="report_size_limit"):
@@ -488,18 +661,116 @@ class TestAsyncExportTimer:
 
         class Good:
             async def export(self, snapshot):
-                received.append(snapshot)
+                received.append(snapshot.to_canonical_dict())
 
         class Bad:
             async def export(self, snapshot):
                 failures.append(1)
                 raise RuntimeError("destination is down")
 
-        timer = AsyncMetricsExportTimer(_StubCluster([Bad(), Good()]), 3600.0)
-        with caplog.at_level(logging.WARNING):
-            await timer._export_once()
-        assert len(received) == 1 and len(failures) == 1
-        assert "raised" in caplog.text
+        cluster = _StubCluster([Bad(), Good()])
+        timer = AsyncMetricsExportTimer(cluster, 3600.0)
+        try:
+            with caplog.at_level(logging.WARNING):
+                await asyncio.to_thread(timer._export_once)
+            assert len(received) == 1 and len(failures) == 1
+            assert "raised" in caplog.text
+        finally:
+            await cluster._async_metrics_export_worker.close()
+
+    async def test_exporter_cancellation_is_isolated_from_the_scheduler(self, caplog):
+        calls = []
+
+        class Cancelled:
+            async def export(self, snapshot):
+                raise asyncio.CancelledError
+
+        class Good:
+            async def export(self, snapshot):
+                calls.append(1)
+
+        cluster = _StubCluster([Cancelled(), Good()])
+        timer = AsyncMetricsExportTimer(cluster, 3600.0)
+        try:
+            with caplog.at_level(logging.WARNING):
+                await asyncio.to_thread(timer._export_once)
+            assert calls == [1]
+            assert "cancelled its invocation" in caplog.text
+        finally:
+            await cluster._async_metrics_export_worker.close()
+
+    async def test_a_slow_async_exporter_times_out_and_the_next_runs(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        class Slow:
+            def __init__(self):
+                self.calls = 0
+
+            async def export(self, snapshot):
+                self.calls += 1
+                started.set()
+                while not release.is_set():
+                    await asyncio.sleep(0.001)
+
+        class Good:
+            def __init__(self):
+                self.calls = 0
+
+            async def export(self, snapshot):
+                self.calls += 1
+
+        slow, good = Slow(), Good()
+        settings = SimpleNamespace(export_timeout=timedelta(milliseconds=20))
+        cluster = _StubCluster([slow, good])
+        timer = AsyncMetricsExportTimer(cluster, 3600.0, settings)
+        try:
+            await asyncio.to_thread(timer._export_once)
+            await asyncio.to_thread(AsyncMetricsExportTimer(cluster, 3600.0, settings)._export_once)
+            assert started.is_set()
+            assert slow.calls == 1, "a timed-out exporter must not be re-entered"
+            assert good.calls == 2
+        finally:
+            release.set()
+            await cluster._async_metrics_export_worker.close()
+
+    async def test_exporter_runs_on_a_dedicated_event_loop_thread_by_default(self):
+        observed = {}
+
+        class Exporter:
+            async def export(self, snapshot):
+                observed["thread"] = threading.get_ident()
+                observed["loop"] = asyncio.get_running_loop()
+
+        cluster = _StubCluster([Exporter()])
+        timer = AsyncMetricsExportTimer(cluster, 3600.0)
+        try:
+            await asyncio.to_thread(timer._export_once)
+            assert observed["thread"] != threading.get_ident()
+            assert observed["loop"] is not asyncio.get_running_loop()
+        finally:
+            await cluster._async_metrics_export_worker.close()
+
+    async def test_isolated_blocking_exporter_does_not_block_application_loop(self):
+        events = []
+
+        class Blocking:
+            async def export(self, snapshot):
+                events.append("export-start")
+                threading.Event().wait(0.1)
+                events.append("export-finish")
+
+        settings = SimpleNamespace(export_timeout=timedelta(milliseconds=20))
+        cluster = _StubCluster([Blocking()])
+        timer = AsyncMetricsExportTimer(cluster, 3600.0, settings)
+        try:
+            delivery = asyncio.create_task(asyncio.to_thread(timer._export_once))
+            await asyncio.sleep(0.005)
+            events.append("application-tick")
+            await delivery
+            assert events[:2] == ["export-start", "application-tick"]
+        finally:
+            await cluster._async_metrics_export_worker.close()
 
 
 class _AsyncRecordingExporter:
@@ -532,6 +803,30 @@ class TestFinalExport:
         timer.stop()
         assert exporter.calls == []
 
+    def test_sync_stop_interrupts_wait_for_blocked_custom_exporter(self):
+        entered = threading.Event()
+        release = threading.Event()
+
+        class Blocked:
+            def export(self, snapshot):
+                entered.set()
+                release.wait()
+
+        skipped = _RecordingExporter("skipped")
+        settings = SimpleNamespace(export_timeout=timedelta(seconds=30))
+        timer = SyncMetricsExportTimer(
+            _StubCluster([Blocked(), skipped]), 0.001, settings,
+        )
+        timer.start()
+        assert entered.wait(1)
+        metrics_thread = timer._thread
+        try:
+            timer.stop()
+            assert metrics_thread is not None and not metrics_thread.is_alive()
+            assert skipped.calls == []
+        finally:
+            release.set()
+
     def test_a_failing_final_snapshot_is_logged_not_raised(self, caplog):
         timer = SyncMetricsExportTimer(
             _FailingSnapshotCluster([_RecordingExporter("a")]), 3600.0,
@@ -542,43 +837,146 @@ class TestFinalExport:
         assert "Final metrics snapshot failed" in caplog.text
 
     async def test_async_request_stop_snapshots_now_and_delivers_later(self):
-        exporter = _AsyncRecordingExporter()
+        release = threading.Event()
+
+        class Gated:
+            def __init__(self):
+                self.calls = 0
+
+            async def export(self, snapshot):
+                release.wait(1)
+                self.calls += 1
+
+        exporter = Gated()
         cluster = _StubCluster([exporter])
         timer = AsyncMetricsExportTimer(cluster, 3600.0)
         timer.start()
-        delivery = timer.request_stop(final=True)
+        finished = timer.request_stop(final=True)
         # Taken before the caller switches collection off, not when delivered.
         assert cluster.polls == 1 and exporter.calls == 0
-        await delivery
+        release.set()
+        await asyncio.wrap_future(finished)
         assert exporter.calls == 1
+        await cluster._async_metrics_export_worker.close()
 
     async def test_async_plain_request_stop_pushes_nothing(self):
         exporter = _AsyncRecordingExporter()
         cluster = _StubCluster([exporter])
         timer = AsyncMetricsExportTimer(cluster, 3600.0)
         timer.start()
-        assert timer.request_stop() is None
-        assert cluster.polls == 0
+        await asyncio.wrap_future(timer.request_stop())
+        assert cluster.polls == 0 and exporter.calls == 0
 
-    async def test_async_final_stop_delivers_before_returning(self):
-        exporter = _AsyncRecordingExporter()
-        timer = AsyncMetricsExportTimer(_StubCluster([exporter]), 3600.0)
+    async def test_async_finish_runs_after_the_final_push(self):
+        events = []
+
+        class Exporter:
+            async def export(self, snapshot):
+                events.append("export")
+
+        cluster = _StubCluster([Exporter()])
+        timer = AsyncMetricsExportTimer(cluster, 3600.0)
         timer.start()
-        await timer.stop(final=True)
-        assert exporter.calls == 1
+        await timer.stop(final=True, finish=lambda: events.append("finish"))
+        assert events == ["export", "finish"]
+        await cluster._async_metrics_export_worker.close()
 
-    async def test_a_new_timer_waits_for_the_pending_final_push(self):
+    async def test_async_periodic_cycle_runs_off_the_application_loop(self):
+        """The tick, the snapshot and the wait all run on the metrics thread."""
+        app_thread = threading.get_ident()
+        observed = {}
+
+        class Cluster(_StubCluster):
+            def metrics_snapshot(self):
+                observed["snapshot_thread"] = threading.current_thread().name
+                observed["snapshot_ident"] = threading.get_ident()
+                try:
+                    asyncio.get_running_loop()
+                except RuntimeError:
+                    observed["no_loop"] = True
+                return super().metrics_snapshot()
+
         exporter = _AsyncRecordingExporter()
-        pending = asyncio.get_running_loop().create_future()
-        timer = AsyncMetricsExportTimer(_StubCluster([exporter]), 0.0, after=pending)
+        cluster = Cluster([exporter])
+        timer = AsyncMetricsExportTimer(cluster, 0.001)
         timer.start()
         try:
-            for _ in range(5):
-                await asyncio.sleep(0)
-            assert exporter.calls == 0
-            pending.set_result(None)
-            for _ in range(5):
-                await asyncio.sleep(0)
+            for _ in range(200):
+                if exporter.calls:
+                    break
+                await asyncio.sleep(0.005)
+            assert exporter.calls > 0
+            assert observed["snapshot_thread"] == "aerospike-metrics-export"
+            assert observed["snapshot_ident"] != app_thread
+            assert observed.get("no_loop") is True
+        finally:
+            await timer.stop()
+            await cluster._async_metrics_export_worker.close()
+
+    async def test_a_blocked_application_loop_does_not_stop_periodic_export(self):
+        """A periodic tick does not need the application loop to be free."""
+        exporter = _AsyncRecordingExporter()
+        cluster = _StubCluster([exporter])
+        timer = AsyncMetricsExportTimer(cluster, 0.001)
+        timer.start()
+        try:
+            # Hold the application loop without yielding.
+            deadline = time.monotonic() + 1
+            while not exporter.calls and time.monotonic() < deadline:
+                time.sleep(0.005)
             assert exporter.calls > 0
         finally:
             await timer.stop()
+            await cluster._async_metrics_export_worker.close()
+
+    async def test_async_final_stop_delivers_before_returning(self):
+        exporter = _AsyncRecordingExporter()
+        cluster = _StubCluster([exporter])
+        timer = AsyncMetricsExportTimer(cluster, 3600.0)
+        timer.start()
+        await timer.stop(final=True)
+        assert exporter.calls == 1
+        await cluster._async_metrics_export_worker.close()
+
+    @pytest.mark.parametrize("via_request_stop", [False, True])
+    async def test_async_final_export_runs_on_the_dedicated_loop(self, via_request_stop):
+        observed = {}
+
+        class Exporter:
+            async def export(self, snapshot):
+                observed["thread"] = threading.get_ident()
+                observed["loop"] = asyncio.get_running_loop()
+
+        cluster = _StubCluster([Exporter()])
+        timer = AsyncMetricsExportTimer(cluster, 3600.0)
+        timer.start()
+        try:
+            if via_request_stop:
+                await asyncio.wrap_future(timer.request_stop(final=True))
+            else:
+                await timer.stop(final=True)
+            assert observed["thread"] != threading.get_ident()
+            assert observed["loop"] is not asyncio.get_running_loop()
+        finally:
+            await cluster._async_metrics_export_worker.close()
+
+    async def test_a_new_timer_waits_for_the_pending_final_push(self):
+        exporter = _AsyncRecordingExporter()
+        pending = Future()
+        timer = AsyncMetricsExportTimer(_StubCluster([exporter]), 0.0, after=pending)
+        timer.start()
+        try:
+            await asyncio.sleep(0.05)
+            assert exporter.calls == 0
+            pending.set_result(None)
+            # Delivery crosses to the metrics-owned loop, so wait on real time.
+            for _ in range(200):
+                if exporter.calls:
+                    break
+                await asyncio.sleep(0.005)
+            assert exporter.calls > 0
+        finally:
+            await timer.stop()
+            worker = getattr(timer._state.cluster, "_async_metrics_export_worker", None)
+            if worker is not None:
+                await worker.close()

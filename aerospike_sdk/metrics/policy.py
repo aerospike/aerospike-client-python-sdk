@@ -212,7 +212,9 @@ class MetricsPolicy:
         )
 
 
-def _policy_from_settings(settings: "MetricsSettings") -> MetricsPolicy:
+def _policy_from_settings(
+    settings: "MetricsSettings", base: Optional[MetricsPolicy] = None,
+) -> MetricsPolicy:
     """Build a :class:`MetricsPolicy` from configuration-file settings.
 
     Fields the file did not set keep the policy default, so a block naming
@@ -225,6 +227,16 @@ def _policy_from_settings(settings: "MetricsSettings") -> MetricsPolicy:
         The equivalent policy.
     """
     kwargs: Dict[str, Any] = {}
+    if base is not None:
+        kwargs = {
+            "operational_enabled": base.operational_enabled,
+            "latency_unit": base.latency_unit,
+            "latency_columns": base.latency_columns,
+            "latency_shift": base.latency_shift,
+            "sampler": base.sampler,
+            "labels": base.labels,
+            "usage_enabled": base.usage_enabled,
+        }
     if settings.operational_enabled is not None:
         kwargs["operational_enabled"] = settings.operational_enabled
     if settings.latency_unit is not None:
