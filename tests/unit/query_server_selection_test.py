@@ -186,7 +186,8 @@ class TestExplainWhereFlags:
         assert _scan_policy_builder(None)._query_explain_where_flags(None) is None
 
     def test_hard_hint_sets_hard_hint_flag(self):
-        hint = QueryHint(index_name="age_idx", hard_hint=True)
+        with pytest.warns(DeprecationWarning):
+            hint = QueryHint(index_name="age_idx", hard_hint=True)
         flags = _scan_policy_builder(None)._query_explain_where_flags(hint)
         assert flags == (QueryWhereFlags.EXPLAIN | QueryWhereFlags.HARD_HINT)
 
