@@ -15,6 +15,8 @@
 
 """Unit tests for QueryHint dataclass and QueryBuilder.with_hint()."""
 
+import warnings
+
 import pytest
 from aerospike_sdk import Behavior, Filter, QueryDuration
 
@@ -61,15 +63,32 @@ class TestQueryHintValidation:
             QueryHint("age_idx")
 
     def test_hard_hint_without_index_name_raises(self):
-        with pytest.raises(ValueError, match="hard_hint requires index_name"):
-            QueryHint(hard_hint=True)
+        # The guard runs before the deprecation warning, so a bad call raises
+        # cleanly rather than warning first.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with pytest.raises(ValueError, match="hard_hint requires index_name"):
+                QueryHint(hard_hint=True)
+
+    def test_hard_hint_emits_deprecation_warning(self):
+        with pytest.warns(DeprecationWarning, match="hard_hint is deprecated") as caught:
+            hint = QueryHint(index_name="age_idx", hard_hint=True)
+        assert hint.hard_hint is True
+        # The warning is attributed to the caller, not to the dataclass internals.
+        assert caught[0].filename == __file__
+
+    def test_soft_hint_does_not_warn(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            QueryHint(index_name="age_idx", allow_scans_with_where=False)
 
     def test_allow_scans_with_where_and_hard_hint_allowed(self):
-        hint = QueryHint(
-            index_name="age_idx",
-            allow_scans_with_where=False,
-            hard_hint=True,
-        )
+        with pytest.warns(DeprecationWarning):
+            hint = QueryHint(
+                index_name="age_idx",
+                allow_scans_with_where=False,
+                hard_hint=True,
+            )
         assert hint.allow_scans_with_where is False
         assert hint.hard_hint is True
 
