@@ -1,0 +1,36 @@
+name: Grant admin test roles
+description: >
+  Grant the default admin user the roles the integration suite needs when
+  security is on. The server setup action only grants sys-admin, which can
+  set a roster and cannot write data, register UDFs, or manage masking rules.
+
+inputs:
+  port:
+    description: Host service port asadm should dial
+    required: false
+    default: "3000"
+  tools-image:
+    description: aerospike-tools image reference; the job must already be logged into its registry
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Grant admin roles
+      shell: bash
+      run: |
+        set -euo pipefail
+        roles="read-write-udf sys-admin user-admin data-admin service-ctrl masking-admin write-masked read-masked"
+        image="${{ inputs.tools-image }}"
+        port="${{ inputs.port }}"
+        for attempt in $(seq 1 15); do
+          if docker run --rm --network host "$image" \
+            asadm -h 127.0.0.1 -p "$port" -U admin -P admin \
+            --enable --execute "manage acl grant user admin roles ${roles}"; then
+            exit 0
+          fi
+          echo "grant failed (attempt ${attempt}); retrying"
+          sleep 2
+        done
+        echo "::error::Failed to grant admin roles after security was enabled."
+        exit 1

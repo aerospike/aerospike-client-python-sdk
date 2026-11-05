@@ -24,6 +24,7 @@ by any amount of async coverage.
 
 from __future__ import annotations
 
+import os
 import time
 
 import pytest
@@ -36,7 +37,10 @@ from aerospike_sdk.exceptions import CommitError, ResultCode, TransactionError
 from integration.tcp_gate import threaded_gate
 
 BIN_NAME = "bin"
-NAMESPACE = "test_sc"
+# The local single-node rig names this namespace ``test_sc``. The shared server
+# action's strong-consistency mode configures ``test`` instead, so nightly sets
+# AEROSPIKE_SC_NAMESPACE. Unset keeps the local name.
+NAMESPACE = os.environ.get("AEROSPIKE_SC_NAMESPACE", "test_sc").strip() or "test_sc"
 
 # Cut before the mark-roll-forward reaches the server: the commit's outcome is
 # then unknown rather than cleanly failed.
