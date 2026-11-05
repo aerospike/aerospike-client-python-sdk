@@ -34,6 +34,19 @@ The element type defaults to `VectorElementType.FLOAT32`. The others are
 Vector([3, -1, 7], VectorElementType.INT32)
 ```
 
+A `FLOAT16` element given as a Python float is converted by way of single
+precision, then rounded to the nearest half-precision value with ties to
+even, so the same value gives the same bits in every Aerospike client. A
+magnitude of 65520 or more rounds to infinity and raises `ValueError`. A
+NumPy array builds a vector too, and its `dtype` selects the element type;
+to get the same bits from a `float16` array, go through `float32` first:
+
+```python
+import numpy as np
+
+Vector(np.array([0.12, 0.88, 0.47], dtype=np.float32).astype(np.float16))
+```
+
 A vector has at least one element, and every float in it is finite.
 `Vector` raises `ValueError` for an empty sequence, a NaN or an infinity,
 and for more elements than the server stores (256 KiB of element data, so
