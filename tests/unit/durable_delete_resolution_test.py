@@ -90,6 +90,39 @@ class TestMakeWritePolicy:
         wp = qb._make_write_policy(spec)
         assert wp.durable_delete is False
 
+    def test_make_write_policy_override_applies_to_a_plain_write(self):
+        """A write that removes the last bin deletes the record; the override must ride along."""
+        qb = _make_qb()
+        qb._namespace_mode = Mode.AP
+        qb._base_write_policy = None
+        spec = _OperationSpec(keys=[_make_key()], op_type="upsert", durable_delete=True)
+        wp = qb._make_write_policy(spec)
+        assert wp.durable_delete is True
+
+    def test_make_write_policy_plain_write_carries_sc_default(self):
+        qb = _make_qb()
+        qb._namespace_mode = Mode.SC
+        qb._base_write_policy = None
+        spec = _OperationSpec(keys=[_make_key()], op_type="upsert")
+        wp = qb._make_write_policy(spec)
+        assert wp.durable_delete is True
+
+    def test_make_write_policy_plain_write_carries_ap_default(self):
+        qb = _make_qb()
+        qb._namespace_mode = Mode.AP
+        qb._base_write_policy = None
+        spec = _OperationSpec(keys=[_make_key()], op_type="upsert")
+        wp = qb._make_write_policy(spec)
+        assert wp.durable_delete is False
+
+    def test_make_write_policy_explicit_false_on_plain_write_overrides_sc_default(self):
+        qb = _make_qb()
+        qb._namespace_mode = Mode.SC
+        qb._base_write_policy = None
+        spec = _OperationSpec(keys=[_make_key()], op_type="upsert", durable_delete=False)
+        wp = qb._make_write_policy(spec)
+        assert wp.durable_delete is False
+
 
 class TestBatchPolicies:
     def test_make_batch_delete_policy_when_only_spec_durable(self):
@@ -116,6 +149,32 @@ class TestBatchPolicies:
         bwp = qb._make_batch_write_policy(spec)
         assert bwp is not None
         assert bwp.durable_delete is True
+
+    def test_make_batch_write_policy_override_applies_without_record_delete_op(self):
+        spec = _OperationSpec(
+            keys=[_make_key(1), _make_key(2)],
+            op_type="upsert",
+            durable_delete=True,
+        )
+        qb = _make_qb()
+        qb._namespace_mode = Mode.AP
+        bwp = qb._make_batch_write_policy(spec)
+        assert bwp is not None
+        assert bwp.durable_delete is True
+
+    def test_make_batch_write_policy_plain_write_carries_sc_default(self):
+        spec = _OperationSpec(keys=[_make_key(1), _make_key(2)], op_type="upsert")
+        qb = _make_qb()
+        qb._namespace_mode = Mode.SC
+        bwp = qb._make_batch_write_policy(spec)
+        assert bwp is not None
+        assert bwp.durable_delete is True
+
+    def test_make_batch_write_policy_plain_ap_write_needs_no_policy(self):
+        spec = _OperationSpec(keys=[_make_key(1), _make_key(2)], op_type="upsert")
+        qb = _make_qb()
+        qb._namespace_mode = Mode.AP
+        assert qb._make_batch_write_policy(spec) is None
 
 
 class TestBatchDeletePolicyFromBehavior:

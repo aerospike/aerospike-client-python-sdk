@@ -173,13 +173,19 @@ The SDK exposes both *per-operation overrides* and *builder defaults*:
 
 | Method | Scope | Effect |
 |---|---|---|
-| `with_durable_delete()` | one operation | Force durable delete for this delete only |
-| `without_durable_delete()` | one operation | Force a non-durable delete for this delete only |
+| `with_durable_delete()` | one operation | Force a durable delete for this operation |
+| `without_durable_delete()` | one operation | Force a non-durable delete for this operation |
 | `default_with_durable_delete()` | builder | Prefer durable when resolving Behavior defaults — typical for SC namespaces |
 | `default_without_durable_delete()` | builder | Prefer non-durable when resolving Behavior defaults |
 
 The override (`with_*` / `without_*`) wins over the default; the default
 folds into [`Behavior`](../api/behavior.md) settings resolution.
+
+The resolved flag rides on every write, not only on `delete()`. A write that
+removes a record's last bin deletes the record, and the server applies the
+same durable-delete decision to it: on an SC namespace, where the Behavior
+default is durable, removing the last bin leaves a tombstone, and forcing
+that write non-durable is refused with `FAIL_FORBIDDEN`.
 
 ```python
 # Force durable on this single delete (per-op override)

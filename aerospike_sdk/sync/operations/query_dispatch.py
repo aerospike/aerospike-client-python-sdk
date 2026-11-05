@@ -360,10 +360,14 @@ class _BlockingQueryDispatch:
             #
             # Fall back to _make_write_policy when:
             #  - no session-cached base policy (a transaction nulls it), or
-            #  - record-delete op present (applies_dd True; needs the spec's
-            #    effective_dd resolution inside _make_write_policy).
+            #  - the spec carries a durable-delete override or chain default
+            #    (the cached base only knows the behavior's setting).
             base = self._base_write_policy if spec.retryable else self._base_write_policy_nr
-            if base is not None and not spec.contains_record_delete_op:
+            if (
+                base is not None
+                and spec.durable_delete is None
+                and spec.durable_delete_command_default is None
+            ):
                 rea = _OP_TYPE_TO_REA.get(op_type)
                 exp = _to_expiration(spec.ttl_seconds) if spec.ttl_seconds is not None else None
                 try:
@@ -374,7 +378,6 @@ class _BlockingQueryDispatch:
                         record_exists_action=rea,
                         expiration=exp,
                         generation=spec.generation,
-                        durable_delete=False,
                         filter_expression=spec.filter_expression,
                         txn=self._txn,
                     )
@@ -384,7 +387,7 @@ class _BlockingQueryDispatch:
                 return [RecordResult(
                     key=key, record=record, result_code=ResultCode.OK,
                 )]
-            # Slow path: record-delete op or no cached base policy.
+            # Slow path: durable-delete override or no cached base policy.
             wp = self._make_write_policy(spec)
             try:
                 record = self._client.operate_blocking(key, spec.operations, policy=wp)

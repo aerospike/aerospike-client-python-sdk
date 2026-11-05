@@ -25,7 +25,7 @@ a value is the stable contract paired with its result code.
 """
 
 import pytest
-from aerospike_sdk import Exp, ErrorDetailVerbosity, ExpressionTrace, SubCode
+from aerospike_sdk import Exp, ErrorDetailVerbosity, ExpressionTrace, HllConfig, SubCode
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 from aerospike_sdk.policy.behavior import Behavior
@@ -264,3 +264,268 @@ class TestBatchErrorDetail:
         with pytest.raises(Exception) as exc_info:
             failed.or_raise()
         assert exc_info.value.server_message == failed.server_message
+
+
+# =============================================================================
+# Per-condition detail: which failures carry a subcode and which carry only a
+# message. One case per server condition, each in a fresh key.
+# =============================================================================
+
+_BIN = "edv"
+
+
+def _skip_unless(supports_error_detail):
+    if not supports_error_detail:
+        pytest.skip("cluster does not supply extended error detail (server < 8.2.0)")
+
+
+async def _failure(awaitable):
+    """Await an operation that must fail and return the raised error.
+
+    Single-key writes raise from ``execute()``; reads raise from the stream, so
+    a returned stream is drained through ``first_or_raise``.
+    """
+    try:
+        result = await awaitable
+        if hasattr(result, "first_or_raise"):
+            await result.first_or_raise()
+    except AerospikeError as exc:
+        return exc
+    pytest.fail("expected the operation to raise AerospikeError")
+
+
+def _assert_sub_code(exc, result_code, sub_code):
+    assert exc.result_code == result_code, exc
+    assert exc.sub_code == sub_code, exc
+    assert exc.server_message is not None, exc
+
+
+def _assert_no_sub_code(exc, result_code, *expected_substrings):
+    """The status is already fully specific: subcode NONE, message carries context."""
+    assert exc.result_code == result_code, exc
+    assert exc.sub_code == SubCode.NONE, exc
+    assert exc.server_message is not None, exc
+    assert "subcode=" not in exc.server_message
+    for expected in expected_substrings:
+        assert expected in exc.server_message, f"expected {expected!r} in: {exc.server_message}"
+
+
+class TestErrorDetailBinTypeErrors:
+    async def test_increment_string_bin(self, cluster, supports_error_detail):
+        _skip_unless(supports_error_detail)
+        session = _session(cluster, ErrorDetailVerbosity.MESSAGE)
+        key = _DS.id("edv-incr-str")
+        await session.upsert(key).bin(_BIN).set_to("hello").execute()
+        exc = await _failure(session.upsert(key).bin(_BIN).add(1).execute())
+        _assert_no_sub_code(exc, ResultCode.BIN_TYPE_ERROR, "cannot increment")
+
+    async def test_increment_double_on_string_bin(self, cluster, supports_error_detail):
+        _skip_unless(supports_error_detail)
+        session = _session(cluster, ErrorDetailVerbosity.MESSAGE)
+        key = _DS.id("edv-incr-dbl")
+        await session.upsert(key).bin(_BIN).set_to("hello").execute()
+        exc = await _failure(session.upsert(key).bin(_BIN).add(1.5).execute())
+        _assert_no_sub_code(exc, ResultCode.BIN_TYPE_ERROR)
+
+    async def test_prepend_to_integer_bin(self, cluster, supports_error_detail):
+        _skip_unless(supports_error_detail)
+        session = _session(cluster, ErrorDetailVerbosity.MESSAGE)
+        key = _DS.id("edv-prepend-int")
+        await session.upsert(key).bin(_BIN).set_to(1).execute()
+        exc = await _failure(session.upsert(key).bin(_BIN).prepend("bad").execute())
+        _assert_no_sub_code(exc, ResultCode.BIN_TYPE_ERROR, "prepend")
+
+    async def test_hll_add_on_integer_bin(self, cluster, supports_error_detail):
+        _skip_unless(supports_error_detail)
+        session = _session(cluster, ErrorDetailVerbosity.MESSAGE)
+        key = _DS.id("edv-hll-int")
+        await session.upsert(key).bin(_BIN).set_to(1).execute()
+        exc = await _failure(
+            session.upsert(key).bin(_BIN).hll_add(["element1"], config=HllConfig.of(8)).execute()
+        )
+        _assert_no_sub_code(exc, ResultCode.BIN_TYPE_ERROR, "bin is not hll type")
+
+    async def test_hll_op_on_raw_bytes_bin(self, cluster, supports_error_detail):
+        _skip_unless(supports_error_detail)
+        session = _session(cluster, ErrorDetailVerbosity.MESSAGE)
+        key = _DS.id("edv-hll-raw")
+        await session.upsert(key).bin(_BIN).set_to(b"\x01\x02\x03").execute()
+        exc = await _failure(session.upsert(key).bin(_BIN).hll_get_count().execute())
+        _assert_no_sub_code(exc, ResultCode.BIN_TYPE_ERROR)
+
+    async def test_list_op_on_raw_bytes_bin(self, cluster, supports_error_detail):
+        _skip_unless(supports_error_detail)
+        session = _session(cluster, ErrorDetailVerbosity.MESSAGE)
+        key = _DS.id("edv-list-raw")
+        await session.upsert(key).bin(_BIN).set_to(b"\xde\xad\xbe\xef").execute()
+        exc = await _failure(session.query(key).bin(_BIN).list_get(0).execute())
+        _assert_no_sub_code(exc, ResultCode.BIN_TYPE_ERROR)
+
+    async def test_map_op_on_list_bin(self, cluster, supports_error_detail):
+        _skip_unless(supports_error_detail)
+        session = _session(cluster, ErrorDetailVerbosity.MESSAGE)
+        key = _DS.id("edv-map-on-list")
+        await session.upsert(key).bin(_BIN).set_to([10, 20, 30]).execute()
+        exc = await _failure(session.query(key).bin(_BIN).on_map_key(1).get_as_map().execute())
+        _assert_no_sub_code(exc, ResultCode.BIN_TYPE_ERROR)
+
+    async def test_map_op_on_raw_bytes_bin(self, cluster, supports_error_detail):
+        _skip_unless(supports_error_detail)
+        session = _session(cluster, ErrorDetailVerbosity.MESSAGE)
+        key = _DS.id("edv-map-raw")
+        await session.upsert(key).bin(_BIN).set_to(b"\x42\x42").execute()
+        exc = await _failure(session.query(key).bin(_BIN).on_map_key(1).get_as_map().execute())
+        _assert_no_sub_code(exc, ResultCode.BIN_TYPE_ERROR)
+
+    async def test_list_ctx_into_string_map_value(self, cluster, supports_error_detail):
+        _skip_unless(supports_error_detail)
+        session = _session(cluster, ErrorDetailVerbosity.MESSAGE)
+        key = _DS.id("edv-map-ctx")
+        await session.upsert(key).bin(_BIN).set_to({1: "leaf-string"}).execute()
+        exc = await _failure(
+            session.query(key).bin(_BIN).on_map_key(1).on_list_index(0).get_values().execute()
+        )
+        _assert_no_sub_code(exc, ResultCode.BIN_TYPE_ERROR)
+
+
+class TestErrorDetailCdtSubCodes:
+    async def test_list_bounded_overflow(self, cluster, supports_error_detail):
+        _skip_unless(supports_error_detail)
+        session = _session(cluster, ErrorDetailVerbosity.MESSAGE)
+        key = _DS.id("edv-list-bounded")
+        await session.upsert(key).bin(_BIN).set_to([10, 20, 30]).execute()
+        exc = await _failure(
+            session.upsert(key).bin(_BIN).list_insert(10, 5, bounded=True).execute()
+        )
+        _assert_sub_code(exc, ResultCode.OP_NOT_APPLICABLE, SubCode.OPNOT_CDT_BOUNDED_LIST_OVERFLOW)
+
+    async def test_list_pop_index_out_of_bounds(self, cluster, supports_error_detail):
+        _skip_unless(supports_error_detail)
+        session = _session(cluster, ErrorDetailVerbosity.MESSAGE)
+        key = _DS.id("edv-list-pop")
+        await session.upsert(key).bin(_BIN).set_to([10, 20, 30]).execute()
+        exc = await _failure(session.upsert(key).bin(_BIN).list_pop(99).execute())
+        _assert_sub_code(exc, ResultCode.OP_NOT_APPLICABLE, SubCode.OPNOT_CDT_INDEX_OUT_OF_BOUNDS)
+
+    async def test_list_add_unique_violation(self, cluster, supports_error_detail):
+        _skip_unless(supports_error_detail)
+        session = _session(cluster, ErrorDetailVerbosity.MESSAGE)
+        key = _DS.id("edv-list-unique")
+        await session.upsert(key).bin(_BIN).set_to([10, 20, 30]).execute()
+        exc = await _failure(session.upsert(key).bin(_BIN).list_append(20, unique=True).execute())
+        _assert_no_sub_code(exc, ResultCode.ELEMENT_EXISTS)
+
+    async def test_map_create_only_existing_key(self, cluster, supports_error_detail):
+        _skip_unless(supports_error_detail)
+        session = _session(cluster, ErrorDetailVerbosity.MESSAGE)
+        key = _DS.id("edv-map-create")
+        await session.upsert(key).bin(_BIN).set_to({1: "a"}).execute()
+        exc = await _failure(session.upsert(key).bin(_BIN).map_insert_items({1: "b"}).execute())
+        _assert_no_sub_code(exc, ResultCode.ELEMENT_EXISTS)
+
+    async def test_map_update_only_missing_key(self, cluster, supports_error_detail):
+        _skip_unless(supports_error_detail)
+        session = _session(cluster, ErrorDetailVerbosity.MESSAGE)
+        key = _DS.id("edv-map-update")
+        await session.upsert(key).bin(_BIN).set_to({1: "a"}).execute()
+        exc = await _failure(session.upsert(key).bin(_BIN).map_update_items({99: "b"}).execute())
+        _assert_no_sub_code(exc, ResultCode.ELEMENT_NOT_FOUND)
+
+    async def test_hll_fold_target_too_large(self, cluster, supports_error_detail):
+        _skip_unless(supports_error_detail)
+        session = _session(cluster, ErrorDetailVerbosity.MESSAGE)
+        key = _DS.id("edv-hll-fold")
+        await session.delete(key).execute()
+        await session.upsert(key).bin(_BIN).hll_init(HllConfig.of(8)).execute()
+        exc = await _failure(session.upsert(key).bin(_BIN).hll_fold(14).execute())
+        _assert_sub_code(
+            exc, ResultCode.OP_NOT_APPLICABLE, SubCode.OPNOT_HLL_FOLD_INDEX_BITS_TOO_LARGE)
+
+    async def test_hll_init_invalid_index_bits(self, cluster, supports_error_detail):
+        _skip_unless(supports_error_detail)
+        session = _session(cluster, ErrorDetailVerbosity.MESSAGE)
+        key = _DS.id("edv-hll-bad-bits")
+        exc = await _failure(session.upsert(key).bin(_BIN).hll_init(HllConfig.of(30)).execute())
+        _assert_no_sub_code(exc, ResultCode.PARAMETER_ERROR)
+
+    async def test_bit_get_offset_out_of_range(self, cluster, supports_error_detail):
+        _skip_unless(supports_error_detail)
+        session = _session(cluster, ErrorDetailVerbosity.MESSAGE)
+        key = _DS.id("edv-bits-offset")
+        await session.upsert(key).bin(_BIN).set_to(b"\xaa\xbb\xcc\xdd").execute()
+        exc = await _failure(session.upsert(key).bin(_BIN).bit_get(2_000_000_000, 8).execute())
+        _assert_sub_code(exc, ResultCode.PARAMETER_ERROR, SubCode.PARAM_BITS_OFFSET_OUT_OF_RANGE)
+
+    async def test_bit_get_size_zero(self, cluster, supports_error_detail):
+        _skip_unless(supports_error_detail)
+        session = _session(cluster, ErrorDetailVerbosity.MESSAGE)
+        key = _DS.id("edv-bits-size")
+        await session.upsert(key).bin(_BIN).set_to(b"\xaa\xbb\xcc\xdd").execute()
+        exc = await _failure(session.upsert(key).bin(_BIN).bit_get(0, 0).execute())
+        _assert_sub_code(exc, ResultCode.PARAMETER_ERROR, SubCode.PARAM_BITS_SIZE_OUT_OF_RANGE)
+
+
+class TestErrorDetailRecordLevel:
+    async def test_write_create_only_existing_record(self, cluster, supports_error_detail):
+        _skip_unless(supports_error_detail)
+        session = _session(cluster, ErrorDetailVerbosity.MESSAGE)
+        key = _DS.id("edv-create-only")
+        await session.upsert(key).bin(_BIN).set_to(1).execute()
+        exc = await _failure(session.insert(key).bin(_BIN).set_to(2).execute())
+        _assert_no_sub_code(exc, ResultCode.KEY_EXISTS_ERROR)
+
+    async def test_write_replace_only_missing_record(self, cluster, supports_error_detail):
+        _skip_unless(supports_error_detail)
+        session = _session(cluster, ErrorDetailVerbosity.MESSAGE)
+        key = _DS.id("edv-replace-missing")
+        await session.delete(key).execute()
+        exc = await _failure(session.replace_if_exists(key).bin(_BIN).set_to(1).execute())
+        _assert_no_sub_code(exc, ResultCode.KEY_NOT_FOUND_ERROR)
+
+    async def test_write_generation_mismatch(self, cluster, supports_error_detail):
+        _skip_unless(supports_error_detail)
+        session = _session(cluster, ErrorDetailVerbosity.MESSAGE)
+        key = _DS.id("edv-write-gen")
+        await session.upsert(key).bin(_BIN).set_to(1).execute()
+        exc = await _failure(
+            session.upsert(key).bin(_BIN).set_to(2).ensure_generation_is(999).execute()
+        )
+        _assert_no_sub_code(exc, ResultCode.GENERATION_ERROR, "generation")
+
+    async def test_delete_generation_mismatch(self, cluster, supports_error_detail):
+        _skip_unless(supports_error_detail)
+        session = _session(cluster, ErrorDetailVerbosity.MESSAGE)
+        if await session.is_namespace_sc(_DS.namespace):
+            pytest.skip("SC forces a durable delete; see the durable-delete case")
+        key = _DS.id("edv-delete-gen")
+        await session.upsert(key).bin(_BIN).set_to(1).execute()
+        exc = await _failure(session.delete(key).ensure_generation_is(777).execute())
+        _assert_no_sub_code(exc, ResultCode.GENERATION_ERROR, "generation")
+
+    async def test_durable_delete_generation_mismatch(
+        self, cluster, supports_error_detail, enterprise,
+    ):
+        # The durable path (tombstone write) is a different server routine from
+        # the expunge path; this pins that it reports the same detail.
+        _skip_unless(supports_error_detail)
+        if not enterprise:
+            pytest.skip("durable delete is an Enterprise server feature")
+        session = _session(cluster, ErrorDetailVerbosity.MESSAGE)
+        key = _DS.id("edv-durable-gen")
+        await session.upsert(key).bin(_BIN).set_to(1).execute()
+        exc = await _failure(
+            session.delete(key).with_durable_delete().ensure_generation_is(777).execute()
+        )
+        _assert_no_sub_code(exc, ResultCode.GENERATION_ERROR, "generation")
+
+    async def test_exp_write_build_failure_trace(self, cluster, supports_error_detail):
+        _skip_unless(supports_error_detail)
+        session = _session(cluster, ErrorDetailVerbosity.EXPRESSION_TRACE)
+        key = _DS.id("edv-exp-write")
+        await session.upsert(key).bin(_BIN).set_to(1).execute()
+        exc = await _failure(session.upsert(key).upsert_from(_BIN, _bad_expression()).execute())
+        _assert_no_sub_code(
+            exc, ResultCode.PARAMETER_ERROR, "invalid expression in operation request")
+        if exc.exp_trace is None:
+            pytest.skip("server build does not emit an expression trace (needs SERVER-1137+)")
+        assert exc.exp_trace.phase == ExpressionTrace.PHASE_BUILD
