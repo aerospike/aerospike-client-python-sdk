@@ -536,11 +536,17 @@ class Driver:
     async def _watch(self, address: str, node: str) -> None:
         try:
             host, port = split_host_port(address)
+            # One connection per probe, to the address the name resolves to
+            # first, as the reference driver's probe does: a name with several
+            # addresses is not polled on all of them at once.
+            loop = asyncio.get_running_loop()
+            resolved = await loop.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+            probe_host = resolved[0][4][0] if resolved else host
             serving_at: Optional[int] = None
             last_closed_at: Optional[int] = None
             while serving_at is None:
                 attempt = now_ms()
-                if await self._tcp_open(host, port):
+                if await self._tcp_open(probe_host, port):
                     serving_at = attempt
                 else:
                     last_closed_at = attempt
