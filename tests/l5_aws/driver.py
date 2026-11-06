@@ -380,10 +380,14 @@ class Driver:
         )
 
     async def run(self) -> int:
-        handler = WarningHandler(level=logging.WARNING)
+        # The contract forwards warnings; L5_DRIVER_LOG_LEVEL=DEBUG also
+        # forwards the client's per-address validation outcomes, for reading
+        # a row's timeline after the fact.
+        level = logging.getLevelName(os.environ.get("L5_DRIVER_LOG_LEVEL", "WARNING").upper())
+        handler = WarningHandler(level=level)
         handler.setFormatter(logging.Formatter("%(name)s: %(message)s"))
         logging.getLogger().addHandler(handler)
-        logging.getLogger().setLevel(logging.WARNING)
+        logging.getLogger().setLevel(level)
         try:
             self.cluster = await self.cluster_definition().connect()
         except Exception as e:
