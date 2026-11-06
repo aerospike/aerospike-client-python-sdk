@@ -337,6 +337,17 @@ class WarningHandler(logging.Handler):
         emit({"type": "log", "t": now_ms(), "level": record.levelname, "message": self.format(record)})
 
 
+class ValidatorTraceHandler(logging.Handler):
+    """The client's per-address validation outcomes, on stderr with the
+    driver's clock, so a row's log shows which address answered when. The
+    harness keeps stderr beside the row's checks; stdout stays the contract."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        with _OUT_LOCK:
+            sys.stderr.write(f"t={now_ms()} {self.format(record)}\n")
+            sys.stderr.flush()
+
+
 class Driver:
     def __init__(self, options: argparse.Namespace) -> None:
         self.options = options
@@ -380,14 +391,16 @@ class Driver:
         )
 
     async def run(self) -> int:
-        # The contract forwards warnings; L5_DRIVER_LOG_LEVEL=DEBUG also
-        # forwards the client's per-address validation outcomes, for reading
-        # a row's timeline after the fact.
-        level = logging.getLevelName(os.environ.get("L5_DRIVER_LOG_LEVEL", "WARNING").upper())
-        handler = WarningHandler(level=level)
+        handler = WarningHandler(level=logging.WARNING)
         handler.setFormatter(logging.Formatter("%(name)s: %(message)s"))
         logging.getLogger().addHandler(handler)
-        logging.getLogger().setLevel(level)
+        logging.getLogger().setLevel(logging.WARNING)
+        trace = ValidatorTraceHandler(level=logging.DEBUG)
+        trace.setFormatter(logging.Formatter("%(name)s: %(message)s"))
+        validator = logging.getLogger("aerospike_core.cluster.node_validator")
+        validator.addHandler(trace)
+        validator.setLevel(logging.DEBUG)
+        validator.propagate = False
         try:
             self.cluster = await self.cluster_definition().connect()
         except Exception as e:
