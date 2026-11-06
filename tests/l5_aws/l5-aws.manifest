@@ -5,7 +5,7 @@
 # client, so no package index or credential is needed there. L5_PNC_COMMIT is the
 # aerospike-client-python-native commit to build; keep it on the commit the SDK's
 # pinned dev wheel was built from.
-L5_PNC_COMMIT='f50a3ed'
+L5_PNC_COMMIT='9b84125'
 L5_SETUP='sudo dnf install -y -q python3.11 python3.11-pip gcc git && curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal'
 L5_BUILD='source "$HOME/.cargo/env" && python3.11 -m venv .l5-venv && .l5-venv/bin/pip install -q --upgrade pip && .l5-venv/bin/pip install -q "git+https://github.com/aerospike/aerospike-client-python-native@'"$L5_PNC_COMMIT"'" && .l5-venv/bin/pip install -q --no-deps . && .l5-venv/bin/pip install -q "typing_extensions>=4.0.0" "pyyaml>=6.0"'
 L5_DRIVER='.l5-venv/bin/python tests/l5_aws/driver.py'
