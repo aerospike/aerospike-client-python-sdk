@@ -15,9 +15,15 @@
 
 """Unit-suite fixtures. Unit tests never connect; seeds are inert config."""
 
+import sys
+
 import pytest
 
 from aerospike_sdk.aio.cluster_definition import ClusterDefinition, Host
+
+# The benchmark harness is POSIX-only (it reads rusage), and it is not part of
+# the installed package, so its tests have nothing to check on Windows.
+collect_ignore_glob = ["benchmarks_*_test.py"] if sys.platform == "win32" else []
 
 
 @pytest.fixture
