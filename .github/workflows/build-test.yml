@@ -148,6 +148,49 @@ jobs:
       - name: Run unit tests
         run: python -m pytest tests/unit -v --cov=aerospike_sdk --cov-report=term --cov-fail-under=65
 
+  # Native Windows lacks the POSIX-only stdlib modules, so an import that is
+  # fine everywhere else can break `import aerospike_sdk` there. Unit tests
+  # only: hosted Windows runners cannot run the Linux server container. The
+  # pinned PNC version must carry a win_amd64 wheel for this Python.
+  unit-windows:
+    name: unit (windows, 3.14)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.14
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      - name: Setup JFrog CLI
+        id: jfrog
+        uses: step-security/setup-jfrog-cli@3054b554c0fb4915b3d58847fb7730c593dbb934 # v5.0.0
+        env:
+          JF_PROJECT: ${{ vars.JFROG_PROJECT }}
+        with:
+          oidc-provider-name: ${{ vars.OIDC_PROVIDER_NAME || 'gh-aerospike' }}
+          oidc-audience: ${{ vars.OIDC_AUDIENCE || 'aerospike' }}
+
+      - name: Install SDK and dev dependencies
+        env:
+          JF_OIDC_USER: ${{ steps.jfrog.outputs.oidc-user }}
+          JF_OIDC_TOKEN: ${{ steps.jfrog.outputs.oidc-token }}
+        run: |
+          set -euo pipefail
+          user_enc=$(python -c "import urllib.parse, os; print(urllib.parse.quote(os.environ['JF_OIDC_USER'], safe=''))")
+          pip install ".[dev]" --only-binary aerospike-native \
+            --extra-index-url "https://${user_enc}:${JF_OIDC_TOKEN}@artifact.aerospike.io/artifactory/api/pypi/${{ vars.JFROG_PROJECT }}-pypi-dev-local/simple/"
+
+      - name: Import the package
+        run: python -c "import aerospike_sdk; print(aerospike_sdk.__version__)"
+
+      - name: Run unit tests
+        run: python -m pytest tests/unit -v
+
   integration:
     runs-on: ubuntu-latest
     strategy:
