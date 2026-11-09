@@ -26,11 +26,16 @@ from functools import lru_cache
 from importlib.metadata import version
 from datetime import datetime, timezone
 import os
-import resource
 import sys
 import threading
 import time
 from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Sequence, Set, Tuple
+
+if sys.platform == "win32":
+    import ctypes
+    from ctypes import wintypes
+else:
+    import resource
 
 from aerospike_native import (
     ClusterMetrics as _PncClusterMetrics,
@@ -156,8 +161,9 @@ class ProcessSampler:
     percentage of the wall time elapsed, so a busy process on several cores
     can read above 100. The first sample measures from the sampler's
     creation. Memory is the resident set size in bytes: current on Linux,
-    from the process's own accounting; the process peak elsewhere, which is
-    what the platform reports without a third-party dependency.
+    from the process's own accounting, and on Windows, where it is the
+    working set; the process peak elsewhere, which is what the platform
+    reports without a third-party dependency.
     """
 
     def __init__(self) -> None:
@@ -178,16 +184,48 @@ class ProcessSampler:
         return max(cpu, 0.0), _resident_bytes()
 
 
-def _resident_bytes() -> int:
-    try:
-        with open("/proc/self/statm", encoding="ascii") as f:
-            pages = int(f.read().split()[1])
-        return pages * os.sysconf("SC_PAGE_SIZE")
-    except (OSError, ValueError, IndexError):
-        pass
-    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    # Linux reports kilobytes here; macOS and the BSDs report bytes.
-    return int(peak) if sys.platform == "darwin" or "bsd" in sys.platform else int(peak) * 1024
+if sys.platform == "win32":
+    class _ProcessMemoryCounters(ctypes.Structure):
+        """The Win32 ``PROCESS_MEMORY_COUNTERS`` structure."""
+
+        _fields_ = [
+            ("cb", wintypes.DWORD),
+            ("PageFaultCount", wintypes.DWORD),
+            ("PeakWorkingSetSize", ctypes.c_size_t),
+            ("WorkingSetSize", ctypes.c_size_t),
+            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+            ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+            ("PagefileUsage", ctypes.c_size_t),
+            ("PeakPagefileUsage", ctypes.c_size_t),
+        ]
+
+    _kernel32 = ctypes.WinDLL("kernel32")
+    _kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    _get_process_memory_info = _kernel32.K32GetProcessMemoryInfo
+    _get_process_memory_info.argtypes = (
+        wintypes.HANDLE, ctypes.POINTER(_ProcessMemoryCounters), wintypes.DWORD)
+    _get_process_memory_info.restype = wintypes.BOOL
+    _CURRENT_PROCESS = _kernel32.GetCurrentProcess()
+
+    def _resident_bytes() -> int:
+        counters = _ProcessMemoryCounters()
+        counters.cb = ctypes.sizeof(counters)
+        if not _get_process_memory_info(_CURRENT_PROCESS, ctypes.byref(counters), counters.cb):
+            return 0
+        return counters.WorkingSetSize
+else:
+    def _resident_bytes() -> int:
+        try:
+            with open("/proc/self/statm", encoding="ascii") as f:
+                pages = int(f.read().split()[1])
+            return pages * os.sysconf("SC_PAGE_SIZE")
+        except (OSError, ValueError, IndexError):
+            pass
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # Linux reports kilobytes here; macOS and the BSDs report bytes.
+        return int(peak) if sys.platform == "darwin" or "bsd" in sys.platform else int(peak) * 1024
 
 
 # Departed nodes retained at once. Past this, a departure is counted rather

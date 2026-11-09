@@ -440,8 +440,9 @@ header(5) cluster[cluster_name,client_type,client_version,app_id,labels[],cpu,me
   when the snapshot is built. `cpu` is CPU time consumed since the previous
   snapshot as a percentage of the wall time elapsed, so a busy process on
   several cores can read above 100. `mem` is the resident set size in bytes:
-  current on Linux, and the process's peak on macOS, which is what the platform
-  reports without a third-party dependency.
+  current on Linux and Windows (where it is the working set), and the
+  process's peak on macOS, which is what the platform reports without a
+  third-party dependency.
 - `command_count` and `command_retries` are the cluster counters described in
   [Known limitations](#known-limitations). They read 0 unless the operational
   tier is on.
