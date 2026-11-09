@@ -14,6 +14,7 @@
 
 import copy
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import List
 
 import time
@@ -32,8 +33,12 @@ from aerospike_sdk.metrics import (
     MetricsSnapshot,
     Sampler,
 )
-from aerospike_sdk.metrics.snapshot import _COMMAND_LATENCY_GROUP, _merge_histograms, ProcessSampler
-from aerospike_sdk.metrics.export import _NodeCloseTracker
+from aerospike_sdk.metrics.snapshot import (
+    _COMMAND_LATENCY_GROUP,
+    _merge_histograms,
+    DepartedNodes,
+    ProcessSampler,
+)
 
 
 class TestMetricsPolicy:
@@ -150,22 +155,42 @@ class TestDerivedHistogramMerge:
         assert merged.count == 0
         assert merged.average == 0.0
 
+    def test_no_samples_keeps_one_zero_per_column(self):
+        merged = _merge_histograms(
+            [_FakeHistogram([0, 0, 0], count=0, min=0, max=0, sum=0.0)],
+            LatencyUnit.MILLISECONDS,
+        )
+        assert merged.buckets == (0, 0, 0)
+
 
 class _FakeNode:
     def __init__(self, name, address, host):
         self.name, self.address, self.host = name, address, host
 
 
+class _FakeAggregate:
+    """The cluster roll-up: one whole-call histogram per command type."""
+
+    latency_unit = LatencyUnit.MICROSECONDS
+    transaction_retry_count = 0
+
+    def __init__(self, histograms):
+        self._histograms = {str(ct): h for ct, h in histograms.items()}
+
+    def command_histogram(self, command_type):
+        return self._histograms.get(str(command_type))
+
+
 class _FakePncSnapshot:
     """Stands in for the underlying client's snapshot object."""
 
-    def __init__(self, doc):
+    def __init__(self, doc, command_histograms=None):
         self._doc = doc
         self.total_nodes = 1
         self.exceeded_max_retries = 1
         self.exceeded_total_timeout = 2
-        self.nodes = {}
-        self.cluster_aggregated = None
+        self.nodes = {host: None for host in doc if ":" in host}
+        self.cluster_aggregated = _FakeAggregate(command_histograms or {})
 
     def to_dict(self):
         return self._doc
@@ -191,7 +216,7 @@ _RAW = {
                     "bytes_received": {"buckets": [1], "count": 1, "sum": 120.0},
                     "bytes_sent": {"buckets": [1], "count": 1, "sum": 80.0},
                     "connection_aq": {"buckets": [5, 1], "count": 6, "sum": 6.0},
-                    "latency": {"buckets": [0, 4], "count": 4, "sum": 40.0},
+                    "latency": {"buckets": [0, 4], "count": 4, "sum": 40.0, "min": 6, "max": 14},
                 },
                 "Put": {
                     "latency": {"buckets": [2, 0], "count": 2, "sum": 10.0},
@@ -266,6 +291,13 @@ class TestCanonicalSnapshot:
         assert doc["cluster_name"] == "c1"
         assert doc["app_id"] == "billing"
         assert doc["timestamp"].endswith("+00:00")
+
+    def test_timestamp_is_the_capture_time_for_every_exporter(self):
+        snapshot = self._snapshot()
+        first = snapshot.to_canonical_dict()["timestamp"]
+        time.sleep(0.002)
+        assert snapshot.to_canonical_dict()["timestamp"] == first
+        assert snapshot._with_departed(())._timestamp == snapshot._timestamp
 
     def test_tier_flags_follow_what_was_collecting(self):
         on = MetricsSnapshot(
@@ -460,29 +492,59 @@ class TestCanonicalSnapshot:
         assert conns["closed_error"] == 2
         assert conns["closed_node_removed"] == 1
 
-    def test_nodes_departed_is_empty_on_a_plain_pull(self):
-        """Departure is tracked by the export timer, not by pulls."""
+    def test_nodes_departed_is_empty_without_departure_state(self):
         doc = self._snapshot().to_canonical_dict()
         assert doc["nodes_departed"] == []
+        assert doc["nodes_departed_dropped"] == 0
 
     def test_a_departed_node_moves_to_nodes_departed(self):
         # An empty live-node list: the one measured host has left the cluster.
         snapshot = self._snapshot(nodes=[])
-        snapshot._mark_departed(_NodeCloseTracker())
+        snapshot._mark_departed(DepartedNodes())
         doc = snapshot.to_canonical_dict()
         assert doc["nodes"] == []
         assert [n["address"] for n in doc["nodes_departed"]] == ["127.0.0.1"]
 
-    def test_an_already_reported_departure_is_listed_nowhere(self):
-        """The tracker reports each host once; afterwards it is neither live nor departed."""
+    def test_a_departed_node_keeps_the_name_it_had_while_live(self):
+        departures = DepartedNodes()
+        self._snapshot(nodes=[_FakeNode("BB9", "10.0.0.1", ("127.0.0.1", 3010))])._mark_departed(departures)
+        snapshot = self._snapshot(nodes=[])
+        snapshot._mark_departed(departures)
+        assert snapshot.to_canonical_dict()["nodes_departed"][0]["name"] == "BB9"
 
-        tracker = _NodeCloseTracker()
+    def test_pulls_do_not_consume_a_departure(self):
+        """Only a successful export drains a departure; every pull still lists it."""
+        departures = DepartedNodes()
+        for _ in range(2):
+            snapshot = self._snapshot(nodes=[])
+            snapshot._mark_departed(departures)
+            assert len(snapshot.to_canonical_dict()["nodes_departed"]) == 1
+
+    def test_a_delivered_departure_is_listed_nowhere(self):
+        """Once received, a departed host is neither live nor departed."""
+        departures = DepartedNodes()
+        exporter = object()
+        departures.track([exporter])
         first = self._snapshot(nodes=[])
-        first._mark_departed(tracker)
+        first._mark_departed(departures)
+        departures.delivered(exporter, first._departed_sequence)
         second = self._snapshot(nodes=[])
-        second._mark_departed(tracker)
+        second._mark_departed(departures)
         doc = second.to_canonical_dict()
         assert doc["nodes"] == [] and doc["nodes_departed"] == []
+
+    def test_cluster_latency_is_the_whole_call_histograms_by_group(self):
+        snapshot = MetricsSnapshot(_FakePncSnapshot(_RAW, command_histograms={
+            CommandType.GET: _FakeHistogram([3, 1], count=4, min=1, max=5, sum=9.0),
+            CommandType.EXISTS: _FakeHistogram([1, 0], count=1, min=0, max=0, sum=0.0),
+            CommandType.OPERATE: _FakeHistogram([0, 2], count=2, min=3, max=7, sum=10.0),
+            CommandType.BATCH_READ: _FakeHistogram([0, 0], count=0, min=0, max=0, sum=0.0),
+        }))
+        latency = snapshot.to_canonical_dict()["cluster"]["latency"]
+        assert list(latency) == ["read", "write", "batch", "query"]
+        assert latency["read"] == {"buckets": [4, 1], "sum": 9.0, "count": 5, "min": 0, "max": 5}
+        assert latency["write"] == {"buckets": [0, 2], "sum": 10.0, "count": 2, "min": 3, "max": 7}
+        assert latency["batch"]["buckets"] == [0, 0] and latency["batch"]["count"] == 0
 
     def test_namespace_counters(self):
         ns = self._snapshot().to_canonical_dict()["nodes"][0]["namespaces"][0]
@@ -494,10 +556,21 @@ class TestCanonicalSnapshot:
         assert ns["bytes_out"] == 80
 
     def test_latency_grouped_by_command_family(self):
-        ns = self._snapshot().to_canonical_dict()["nodes"][0]["namespaces"][0]
-        assert ns["latency"]["read"] == [0, 4]      # Get
-        assert ns["latency"]["write"] == [2, 0]     # Put
-        assert ns["latency"]["conn"] == [5, 1]      # connection acquisition
+        latency = self._snapshot().to_canonical_dict()["nodes"][0]["namespaces"][0]["latency"]
+        assert latency["read"]["buckets"] == [0, 4]     # Get
+        assert latency["write"]["buckets"] == [2, 0]    # Put
+        assert latency["conn"]["buckets"] == [5, 1]     # connection acquisition
+
+    def test_unrecorded_namespace_groups_are_zero_filled(self):
+        """A consumer can index every group without testing for the key."""
+        doc = self._snapshot(policy=MetricsPolicy(latency_columns=3)).to_canonical_dict()
+        latency = doc["nodes"][0]["namespaces"][0]["latency"]
+        assert list(latency) == ["read", "write", "batch", "query", "conn"]
+        assert latency["batch"] == {"buckets": [0, 0, 0], "sum": 0.0, "count": 0, "min": 0, "max": 0}
+
+    def test_namespace_latency_carries_the_summary_fields(self):
+        read = self._snapshot().to_canonical_dict()["nodes"][0]["namespaces"][0]["latency"]["read"]
+        assert read == {"buckets": [0, 4], "sum": 40.0, "count": 4, "min": 6, "max": 14}
 
 
 class TestProcessSampler:
@@ -549,3 +622,99 @@ class TestConfigFileOwnsTheSwitch:
     def test_no_file_means_no_owner(self):
         """Settings given in code are not re-applied, so they cannot undo the API."""
         ClusterBase._check_metrics_switch_is_free(self._cluster(None, False), "disable_metrics")
+
+
+class _PncMetricsSwitch:
+    def __init__(self):
+        self.on, self.enables = False, 0
+
+    def metrics_enabled(self):
+        return self.on
+
+    def enable_metrics(self, policy):
+        self.on = True
+        self.enables += 1
+
+    def disable_metrics(self):
+        self.on = False
+
+
+class _MetricsCluster(ClusterBase):
+    """The shared enable and reload logic over a recording client and timer."""
+
+    def __init__(self, metrics=None):
+        self._sdk_client = SimpleNamespace(
+            underlying_client=_PncMetricsSwitch(),
+            _sdk_settings=SystemSettings(metrics=metrics or MetricsSettings()),
+        )
+        self._metrics_policy = None
+        self._code_metrics_policy = None
+        self._export_settings = None
+        self.timer_starts = 0
+
+    def _start_export_timer(self, policy):
+        self._export_settings = self._current_export_settings()
+        self.timer_starts += 1
+
+    def _disable_metrics(self):
+        self._sdk_client.underlying_client.disable_metrics()
+
+    def enable_from_code(self, policy=None):
+        self._code_metrics_policy = policy
+        self._enable_metrics()
+
+    def reload(self, metrics):
+        self._sdk_client._sdk_settings = SystemSettings(metrics=metrics)
+        self._apply_metrics_settings(metrics)
+
+    @property
+    def enables(self):
+        return self._sdk_client.underlying_client.enables
+
+
+class TestMetricsSettingsLayering:
+    """Configured metrics keys over the policy code passed, re-applied only on change."""
+
+    def test_configured_keys_override_the_code_policy_at_enable(self):
+        cluster = _MetricsCluster(MetricsSettings(latency_columns=18))
+        cluster.enable_from_code(MetricsPolicy(operational_enabled=True, labels={"team": "billing"}))
+        policy = cluster._metrics_policy
+        assert policy.latency_columns == 18
+        assert policy.operational_enabled and policy.labels == {"team": "billing"}
+
+    def test_a_reload_silent_on_enabled_reshapes_collection_that_is_on(self):
+        cluster = _MetricsCluster()
+        cluster.enable_from_code(MetricsPolicy(operational_enabled=True))
+        cluster.reload(MetricsSettings(latency_columns=18))
+        assert cluster._metrics_policy.latency_columns == 18
+        assert cluster._metrics_policy.operational_enabled
+        assert cluster.enables == 2
+
+    def test_removing_a_file_key_restores_the_code_value(self):
+        cluster = _MetricsCluster()
+        cluster.enable_from_code(MetricsPolicy(latency_columns=9))
+        cluster.reload(MetricsSettings(latency_columns=18))
+        cluster.reload(MetricsSettings())
+        assert cluster._metrics_policy.latency_columns == 9
+
+    def test_file_labels_replace_the_code_labels(self):
+        cluster = _MetricsCluster(MetricsSettings(labels={"owner": "platform"}))
+        cluster.enable_from_code(MetricsPolicy(labels={"team": "billing", "env": "prod"}))
+        assert cluster._metrics_policy.labels == {"owner": "platform"}
+
+    def test_an_unrelated_reload_restarts_nothing(self):
+        cluster = _MetricsCluster(MetricsSettings(enabled=True))
+        cluster.reload(MetricsSettings(enabled=True))
+        cluster.reload(MetricsSettings(enabled=True))
+        assert cluster.enables == 1 and cluster.timer_starts == 1
+
+    def test_an_export_setting_change_restarts_only_the_push(self):
+        cluster = _MetricsCluster()
+        cluster.enable_from_code()
+        cluster.reload(MetricsSettings(export_interval=timedelta(seconds=5)))
+        assert cluster.enables == 1 and cluster.timer_starts == 2
+
+    def test_a_reload_silent_on_enabled_leaves_collection_off(self):
+        cluster = _MetricsCluster()
+        cluster.reload(MetricsSettings(latency_columns=18))
+        assert not cluster._sdk_client.underlying_client.on and cluster.enables == 0

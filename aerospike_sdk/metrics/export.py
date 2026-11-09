@@ -49,6 +49,7 @@ policy change does not.
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from enum import Enum
 import inspect
@@ -63,13 +64,13 @@ from typing import (
     List,
     Optional,
     Protocol,
-    Sequence,
     Tuple,
     runtime_checkable,
 )
 
 from aerospike_sdk.loggers import SdkLoggers
 from aerospike_sdk.metrics import LatencyType, MetricsSnapshot
+from aerospike_sdk.metrics.snapshot import DepartedNodes
 
 log = logging.getLogger(SdkLoggers.BEHAVIOR)
 
@@ -409,7 +410,7 @@ class MetricsWriter:
                 parts.append(",[")
             latency = namespace.get("latency") or {}
             types = ",".join(
-                f"{kind.value}[{','.join(str(b) for b in (latency.get(kind.value) or [0] * columns))}]"
+                f"{kind.value}[{','.join(str(b) for b in _buckets(latency.get(kind.value), columns))}]"
                 for kind in _LATENCY_ORDER
             )
             parts.append(
@@ -420,6 +421,11 @@ class MetricsWriter:
             )
         parts.append("]]")
         return "".join(parts)
+
+
+def _buckets(series: Any, columns: int) -> List[int]:
+    """A latency series' bucket counts, zeros when the namespace has none."""
+    return (series or {}).get("buckets") or [0] * columns
 
 
 def _parse_timestamp(value: Any) -> datetime:
@@ -437,33 +443,17 @@ def _line_time(moment: datetime) -> str:
     return moment.strftime("%Y-%m-%d %H:%M:%S.") + f"{moment.microsecond // 1000:03d}"
 
 
-class _NodeCloseTracker:
-    """Decides which hosts have left the cluster since the last snapshot.
+class _ExporterHealth:
+    """Suspension state for one registered exporter.
 
-    Not a diff of consecutive snapshots: the underlying client accumulates
-    per-host metrics and never drops a host from the map once seen, so
-    comparing successive snapshots reports a departure exactly never. The live
-    node list is the only thing that shrinks, so membership is judged by
-    joining against it. Each host is reported once.
+    Holds the exporter itself, so its id, the key this state is filed under,
+    cannot be reused by a new exporter while the state exists.
     """
 
-    def __init__(self) -> None:
-        self._closed: set = set()
+    __slots__ = ("exporter", "failures", "suspended", "skipped")
 
-    def departed(self, snapshot_hosts: Sequence[str], live_hosts: Sequence[str]) -> List[str]:
-        """Hosts present in the snapshot, absent from the cluster, not yet reported."""
-        live = set(live_hosts)
-        gone = [h for h in snapshot_hosts if h not in live and h not in self._closed]
-        self._closed.update(gone)
-        return gone
-
-
-class _ExporterHealth:
-    """Suspension state for one registered exporter."""
-
-    __slots__ = ("failures", "suspended", "skipped")
-
-    def __init__(self) -> None:
+    def __init__(self, exporter: Any) -> None:
+        self.exporter = exporter
         self.failures = 0
         self.suspended = False
         self.skipped = 0
@@ -482,29 +472,32 @@ class _ExporterHealth:
 class _MetricsExportTimer:
     """Shared state for the two export timers.
 
-    Holds the departure tracker and per-exporter health; the async and sync
-    timers differ only in how they wait and how they invoke. The exporter list
-    is read from the cluster on every cycle, so registrations made after the
-    timer started still take effect.
+    Holds per-exporter health and hands each exporter the departures it is
+    owed; the async and sync timers differ only in how they wait and how they
+    invoke. The exporter list is read from the cluster on every cycle, so
+    registrations made after the timer started still take effect. Departure
+    state belongs to the cluster, so it survives the timer being restarted.
     """
 
     def __init__(self, cluster: Any, interval_seconds: float, settings: Any = None) -> None:
         self.cluster = cluster
         self.interval = interval_seconds
         self.settings = settings
-        self.tracker = _NodeCloseTracker()
+        self._departed: DepartedNodes = cluster._departed_nodes
         self._health: Dict[int, _ExporterHealth] = {}
 
     def exporters_to_run(self) -> List[Any]:
         """The exporters this cycle calls, honoring the mode and suspensions."""
         current = self.cluster._export_targets()
+        # Suspended exporters stay tracked: they are still owed departures.
+        self._departed.track(current)
         ids = {id(e) for e in current}
-        # Health for a removed exporter would pin its id forever, and a new
-        # exporter can land on a recycled id; prune to the live list.
+        # Health holds its exporter, so a removed one is kept alive until
+        # pruned here, against the live list.
         self._health = {k: v for k, v in self._health.items() if k in ids}
         return [
             exporter for exporter in current
-            if self._health.setdefault(id(exporter), _ExporterHealth()).should_attempt()
+            if self._health.setdefault(id(exporter), _ExporterHealth(exporter)).should_attempt()
         ]
 
     def take(self) -> Optional[Tuple[Any, List[Any]]]:
@@ -514,9 +507,7 @@ class _MetricsExportTimer:
             # Taking a snapshot drains and aggregates per-node state in the
             # client core; skip that work when nothing would consume it.
             return None
-        snapshot = self.cluster.metrics_snapshot()
-        snapshot._mark_departed(self.tracker)
-        return snapshot, runnable
+        return self.cluster.metrics_snapshot(), runnable
 
     def take_final(self) -> Optional[Tuple[Any, List[Any]]]:
         """:meth:`take` for the closing push, which must never fail a disable or close."""
@@ -529,7 +520,13 @@ class _MetricsExportTimer:
             )
             return None
 
-    def record_success(self, exporter: Any) -> None:
+    def view_for(self, exporter: Any, snapshot: Any) -> Any:
+        """``snapshot`` carrying the departures ``exporter`` is owed."""
+        sequence = snapshot._departed_sequence
+        return snapshot._with_departed(self._departed.owed(exporter, sequence))
+
+    def record_success(self, exporter: Any, snapshot: Any) -> None:
+        self._departed.delivered(exporter, snapshot._departed_sequence)
         health = self._health.get(id(exporter))
         if health is None:
             return
@@ -547,7 +544,7 @@ class _MetricsExportTimer:
 
         Called from an ``except`` block so the log line carries the traceback.
         """
-        health = self._health.setdefault(id(exporter), _ExporterHealth())
+        health = self._health.setdefault(id(exporter), _ExporterHealth(exporter))
         health.failures += 1
         if health.suspended:
             log.warning(
@@ -574,8 +571,14 @@ class _MetricsExportTimer:
 class AsyncMetricsExportTimer:
     """Pushes snapshots to the cluster's exporters on its event loop.
 
-    Runs as an ``asyncio.Task``. Snapshotting and exporting are both cold-path
-    work; nothing here touches a request.
+    Runs as an ``asyncio.Task``. Each interval's snapshot is built on a
+    worker thread of the timer's own: draining per-node state in the client
+    core grows with the node count and releases the GIL, so off the loop it
+    neither stalls in-flight operations nor serializes with them. Exporters
+    are the application's coroutines and are awaited on the loop, where
+    whatever they hold -- an HTTP session, an Aerospike session -- is bound.
+    The closing snapshot is taken on the caller, while collection is still
+    on.
 
     ``after`` is a final push still in flight from the timer this one
     replaces; the first export waits for it, so an exporter never sees two
@@ -593,6 +596,12 @@ class AsyncMetricsExportTimer:
         self._state = _MetricsExportTimer(cluster, interval_seconds, settings)
         self._task: Optional[asyncio.Task] = None
         self._after = after
+        # Not the loop's default executor: an application that saturates it
+        # must not delay the export tick.
+        self._worker = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="aerospike-metrics-snapshot",
+        )
+        self._building: Optional[Future] = None
 
     def start(self) -> None:
         """Start the export task; requires a running event loop."""
@@ -611,31 +620,46 @@ class AsyncMetricsExportTimer:
                 log.warning("Metrics export failed; will retry next interval", exc_info=True)
 
     async def _export_once(self) -> None:
-        batch = self._state.take()
-        if batch is not None:
-            await self._deliver(*batch)
+        runnable = self._state.exporters_to_run()
+        if not runnable:
+            return
+        self._building = self._worker.submit(self._state.cluster.metrics_snapshot)
+        snapshot = await asyncio.wrap_future(self._building)
+        self._building = None
+        await self._deliver(snapshot, runnable)
 
     async def _deliver(self, snapshot: Any, runnable: List[Any]) -> None:
         state = self._state
         for exporter in runnable:
             try:
-                await exporter.export(snapshot)
+                await exporter.export(state.view_for(exporter, snapshot))
             except Exception:
                 state.record_failure(exporter)
             else:
-                state.record_success(exporter)
+                state.record_success(exporter, snapshot)
 
     async def _deliver_after(
         self, task: Optional[asyncio.Task], snapshot: Any, runnable: List[Any],
     ) -> None:
+        await self._unwound(task)
+        await self._deliver(snapshot, runnable)
+
+    async def _unwound(self, task: Optional[asyncio.Task]) -> None:
+        """Wait out a cancelled task, and any snapshot build it left on the worker.
+
+        Cancelling the task does not stop a build already running, which
+        still reads the client; it must finish before the client is closed.
+        """
         if task is not None:
             await asyncio.wait({task})
-        await self._deliver(snapshot, runnable)
+        if self._building is not None:
+            await asyncio.gather(asyncio.wrap_future(self._building), return_exceptions=True)
 
     def _cancel(self) -> Optional[asyncio.Task]:
         task, self._task = self._task, None
         if task is not None:
             task.cancel()
+        self._worker.shutdown(wait=False)
         return task
 
     def request_stop(self, *, final: bool = False) -> Optional[Coroutine[Any, Any, None]]:
@@ -657,12 +681,7 @@ class AsyncMetricsExportTimer:
 
     async def stop(self, *, final: bool = False) -> None:
         """Cancel the export task and wait for it; with ``final``, then push one closing snapshot."""
-        task = self._cancel()
-        if task is not None:
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+        await self._unwound(self._cancel())
         if final:
             batch = self._state.take_final()
             if batch is not None:
@@ -705,11 +724,11 @@ class SyncMetricsExportTimer:
         state = self._state
         for exporter in runnable:
             try:
-                exporter.export(snapshot)
+                exporter.export(state.view_for(exporter, snapshot))
             except Exception:
                 state.record_failure(exporter)
             else:
-                state.record_success(exporter)
+                state.record_success(exporter, snapshot)
 
     def stop(self, *, final: bool = False) -> None:
         """Signal the export thread to exit and join it briefly.

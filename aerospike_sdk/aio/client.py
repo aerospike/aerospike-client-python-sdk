@@ -145,6 +145,7 @@ class Client(RoutingCapabilitiesMixin):
             # Full re-apply: collection, the export timer and the usage gate.
             cluster._apply_metrics_settings(settings.metrics)
         else:
+            # The switch alone; the layering needs the cluster's code policy.
             _apply_metrics_settings(self.underlying_client, settings.metrics)
 
     def _start_sdk_config_monitor(self, source: SdkConfigSource) -> None:
