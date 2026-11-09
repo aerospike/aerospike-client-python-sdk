@@ -31,6 +31,8 @@ from aerospike_sdk.metrics import (
 from aerospike_sdk import UDFLang
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.metrics.export import AsyncMetricsExportTimer, MetricsWriter
+from aerospike_sdk.metrics.policy import _ALL_COMMAND_TYPES
+from aerospike_sdk.metrics.snapshot import DepartedNodes
 from aerospike_sdk.metrics import MetricsExporterType
 from aerospike_sdk.policy.system_settings import MetricsSettings, SystemSettings
 
@@ -108,6 +110,12 @@ async def _do_some_ops(cluster, count):
         assert first.is_ok
 
 
+def _command_counts(cluster):
+    """Whole-call sample count per command type, for before/after deltas."""
+    aggregated = cluster.metrics_snapshot().cluster_aggregated
+    return {ct: aggregated.command_histogram(ct).count for ct in _ALL_COMMAND_TYPES}
+
+
 class TestMetricsLifecycle:
 
     async def test_enable_disable_round_trip(self, metrics_cluster):
@@ -118,9 +126,15 @@ class TestMetricsLifecycle:
         assert metrics_cluster.metrics_enabled() is False
 
     async def test_snapshot_before_enable_is_empty(self, metrics_cluster):
+        """Every grouped view and every command histogram is readable, and empty."""
         snapshot = metrics_cluster.metrics_snapshot()
         assert snapshot.total_nodes >= 1
-        assert snapshot.latency(LatencyType.READ).count == 0
+        for latency_type in LatencyType:
+            assert snapshot.latency(latency_type).count == 0, latency_type
+        aggregated = snapshot.cluster_aggregated
+        for command_type in _ALL_COMMAND_TYPES:
+            histogram = aggregated.command_histogram(command_type)
+            assert histogram is not None and histogram.count == 0, command_type
 
 
 class TestMetricsSnapshot:
@@ -156,6 +170,14 @@ class TestMetricsSnapshot:
         # Connection-acquisition view draws from the detailed metrics.
         conn = snapshot.latency(LatencyType.CONN)
         assert conn.count >= 1
+
+        # The canonical whole-call latency is the same grouping, with its summary.
+        cluster_reads = snapshot.to_canonical_dict()["cluster"]["latency"]["read"]
+        assert cluster_reads["count"] == reads.count
+        assert sum(cluster_reads["buckets"]) == reads.count
+        assert len(cluster_reads["buckets"]) == 24
+        assert cluster_reads["sum"] == reads.sum
+        assert cluster_reads["min"] <= cluster_reads["max"]
 
         # Canonical detail is reachable through the snapshot.
         assert general_namespace() in agg.detailed_namespaces()
@@ -323,16 +345,21 @@ class TestMetricsSnapshot:
         keys = [ds.id(f"b{i}") for i in range(5)]
         for key in keys:
             await session.upsert(key).put({"n": 1}).execute()
+        before = _command_counts(metrics_cluster)
 
         result = await session.query(*keys).execute()
         rows = [row async for row in result]
         assert len(rows) == 5
 
-        agg = metrics_cluster.metrics_snapshot().cluster_aggregated
-        batch_reads = agg.command_histogram(CommandType.BATCH_READ)
-        assert batch_reads.count >= 1, "a multi-key read should record as BATCH_READ"
+        after = _command_counts(metrics_cluster)
+        batch_reads = after[CommandType.BATCH_READ] - before[CommandType.BATCH_READ]
+        assert batch_reads >= 1, "a multi-key read should record as BATCH_READ"
         # One batch call is one measurement, not one per key.
-        assert batch_reads.count < len(keys)
+        assert batch_reads < len(keys)
+        # The call lands in its own histogram and leaves every other type alone.
+        for command_type in _ALL_COMMAND_TYPES:
+            if command_type != CommandType.BATCH_READ:
+                assert after[command_type] == before[command_type], command_type
         metrics_cluster.disable_metrics()
 
 
@@ -489,7 +516,7 @@ class TestMetricsExport:
             n["name"]
             for n in nodes
             for ns in n["namespaces"]
-            if sum((ns.get("latency") or {}).get("read") or []) > 0
+            if ((ns.get("latency") or {}).get("read") or {}).get("count", 0) > 0
         ]
         assert len(set(with_reads)) >= 2, (
             f"read latency recorded on {set(with_reads)} of {len(nodes)} nodes; "
@@ -504,13 +531,14 @@ class TestMetricsExport:
         multi_node_metrics_cluster.disable_metrics()
 
     async def test_node_departure_reaches_nodes_departed(self, metrics_cluster):
-        """A host the cluster no longer lists appears in ``nodes_departed`` once.
+        """A host the cluster no longer lists reaches an exporter in ``nodes_departed`` once.
 
         Departure is judged by joining the snapshot's hosts against the live
         node list, because a snapshot keeps every host it ever saw. Stopping a
         real node mid-suite would be destructive and racy, so the live list is
         narrowed instead -- everything downstream of it (the export tick, the
-        tracker, the departed section, the exporter call) is the real path.
+        departure state, the departed section, the exporter call) is the real
+        path.
         """
 
         metrics_cluster.enable_metrics(_SHAPE_SAFE)
@@ -540,13 +568,16 @@ class TestMetricsExport:
         class _EmptiedCluster:
             def __init__(self, real):
                 self._real = real
+                self._departed_nodes = DepartedNodes()
 
             def _export_targets(self):
                 return [recorder]
 
             def metrics_snapshot(self):
                 real = self._real.metrics_snapshot()
-                return MetricsSnapshot(real._pnc, policy=real._policy, nodes=[])
+                snapshot = MetricsSnapshot(real._pnc, policy=real._policy, nodes=[])
+                snapshot._mark_departed(self._departed_nodes)
+                return snapshot
 
         timer = AsyncMetricsExportTimer(_EmptiedCluster(metrics_cluster), 3600.0)
 
@@ -560,7 +591,7 @@ class TestMetricsExport:
         # node's last line from them.
         assert received[0]["nodes_departed"][0]["connections"]["opened"] >= 0
 
-        # Reported once per host, not once per export tick.
+        # Delivered once per host, not once per export tick.
         await timer._export_once()
         assert received[1]["nodes_departed"] == []
         metrics_cluster.disable_metrics()

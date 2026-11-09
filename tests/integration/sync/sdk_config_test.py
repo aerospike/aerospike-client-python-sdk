@@ -21,6 +21,7 @@ never blocks a connect, and hot-reload swaps settings on a live client.
 """
 
 import contextlib
+import dataclasses
 import logging
 import os
 import time
@@ -29,7 +30,9 @@ import pytest
 
 from aerospike_sdk import Behavior, DataSet
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
+from aerospike_sdk.metrics import MetricsPolicy
 from aerospike_sdk.policy import SystemSettings, TransactionSettings
+from aerospike_sdk.policy.system_settings import MetricsSettings
 from aerospike_sdk.sync import ClusterDefinition
 from tests.integration.namespace import general_namespace
 from tests.integration.general_auth import apply_general_auth
@@ -283,3 +286,22 @@ def test_a_file_silent_on_enabled_leaves_the_switch_to_code(aerospike_host, tmp_
             assert cluster.metrics_enabled() is True
             cluster.disable_metrics()
             assert cluster.metrics_enabled() is False
+
+
+def test_file_metrics_keys_layer_over_the_code_policy(aerospike_host, tmp_path):
+    """Applied when code enables, re-applied on reload, and dropped keys fall back to code."""
+    host, port = _host_port(aerospike_host)
+    path = _write(tmp_path, "sdk.yaml", "system:\n  DEFAULT:\n    metrics:\n      labels:\n        owner: ops\n")
+    with _sdk_config_env(path):
+        with apply_general_auth(ClusterDefinition(host, port)).connect() as cluster:
+            cluster.enable_metrics(MetricsPolicy(labels={"team": "billing"}))
+            assert cluster.metrics_snapshot().to_canonical_dict()["labels"] == {"owner": "ops"}
+
+            client = cluster._sdk_client
+            client._apply_sdk_settings(dataclasses.replace(
+                client._sdk_settings, metrics=MetricsSettings(latency_columns=4),
+            ))
+            doc = cluster.metrics_snapshot().to_canonical_dict()
+            assert doc["labels"] == {"team": "billing"}
+            assert doc["latency_columns"] == 4
+            assert cluster.metrics_enabled() is True
