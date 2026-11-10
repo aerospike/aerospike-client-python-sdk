@@ -15,6 +15,7 @@
 
 """Tests for the SDK config hot-reload poll/swap logic (no server needed)."""
 
+import itertools
 import os
 
 from aerospike_sdk.policy.sdk_config_loader import load_and_resolve
@@ -29,10 +30,19 @@ _IMPLICIT_FALSE = (
 )
 
 
+_bump_steps = itertools.count(1)
+
+
 def _bump_mtime(path) -> None:
-    """Advance mtime past filesystem timestamp granularity."""
+    """Advance mtime past filesystem timestamp granularity, further on each call.
+
+    A rewrite resets mtime to the clock, and file times tick coarsely enough on
+    some platforms that two rewrites in one test share a timestamp. A fixed
+    offset from the file's own mtime would then repeat a value the poller has
+    already seen, and its mtime gate would swallow the second change.
+    """
     stat = os.stat(path)
-    os.utime(path, (stat.st_atime, stat.st_mtime + 2))
+    os.utime(path, (stat.st_atime, stat.st_mtime + 2 * next(_bump_steps)))
 
 
 def _make_poller(tmp_path, text=_IMPLICIT_TRUE):

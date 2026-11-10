@@ -136,10 +136,35 @@ await (
     .execute()
 )
 
-# Set a list element by index
+# Set a list element by index (a collection-level verb, not a navigation)
 await (
     session.update(users.id(1))
-    .bin("scores").on_list_index(0).set_to(99)
+    .bin("scores").list_set(0, 99)
+    .execute()
+)
+```
+
+`set_to` on a map key is an unconditional put. Restrict it with keyword-only
+flags, the same idiom the HLL write verbs use:
+
+| Flag | Effect |
+|---|---|
+| `create_only` | Write only when the key is absent; fail with `ELEMENT_EXISTS` if it is present. Mutually exclusive with `update_only`. |
+| `update_only` | Write only when the key is present; fail with `ELEMENT_NOT_FOUND` if it is absent. Mutually exclusive with `create_only`. |
+| `no_fail` | Turn the `create_only` / `update_only` failure into a silent no-op. Has no effect on other server-side errors. |
+| `order` | Key order for the map when this write creates it. |
+| `persist_index` | Maintain a persistent index on the map. Top-level maps only; the server ignores it on a nested map. |
+
+Passing both `create_only=True` and `update_only=True` raises `ValueError`
+at the call site. The bulk verbs `map_insert_items`, `map_update_items` and
+`map_upsert_items` take the same `order`, `persist_index` and `no_fail`
+keywords for many entries at once.
+
+```python
+# Register a default theme without clobbering one the user already chose
+await (
+    session.update(users.id(1))
+    .bin("settings").on_map_key("theme").set_to("light", create_only=True, no_fail=True)
     .execute()
 )
 ```
@@ -305,7 +330,7 @@ CDT navigation composes — navigate into arbitrarily nested structures:
 # $.users_map["alice"].scores[0] = 100
 await (
     session.update(dataset.id(1))
-    .bin("users_map").on_map_key("alice").on_map_key("scores").on_list_index(0).set_to(100)
+    .bin("users_map").on_map_key("alice").on_map_key("scores").list_set(0, 100)
     .execute()
 )
 ```

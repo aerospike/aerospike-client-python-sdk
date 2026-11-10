@@ -113,6 +113,32 @@ def _resolve_map_policy(
     return MapPolicy(order, None)
 
 
+def _resolve_map_entry_policy(
+    *,
+    create_only: bool,
+    update_only: bool,
+    no_fail: bool,
+    order: MapOrder | None,
+    persist_index: bool,
+) -> MapPolicy:
+    """Build the ``MapPolicy`` for a single-entry put from its keyword flags.
+
+    ``create_only`` and ``update_only`` are mutually exclusive; passing both
+    raises :class:`ValueError`.
+    """
+    if create_only and update_only:
+        raise ValueError("create_only and update_only are mutually exclusive")
+    if create_only:
+        base = MapWriteFlags.CREATE_ONLY
+    elif update_only:
+        base = MapWriteFlags.UPDATE_ONLY
+    else:
+        base = MapWriteFlags.DEFAULT
+    return _resolve_map_policy(
+        base, order=order, persist_index=persist_index, no_fail=no_fail,
+    )
+
+
 class _RemoveMixin:
     """Shared remove logic for CDT write builders."""
 
@@ -190,7 +216,7 @@ class CdtWriteBuilder(_RemoveMixin, CdtReadBuilder[T]):
         bin_name: str = "",
         ctx: Sequence[Any] = (),
         to_ctx: Callable[[], Any] | None = None,
-        set_to_factory: Callable[[Any], Any] | None = None,
+        set_to_factory: Callable[[Any, MapPolicy], Any] | None = None,
         add_factory: Callable[[Any], Any] | None = None,
         filterable: bool = True,
     ) -> None:
@@ -240,7 +266,7 @@ class CdtWriteBuilder(_RemoveMixin, CdtReadBuilder[T]):
         return self._build_navigated(
             op_factory=lambda rt: MapOperation.get_by_key(b, key, rt).set_context(ctx_l),
             remove_factory=lambda rt: MapOperation.remove_by_key(b, key, rt).set_context(ctx_l),
-            set_to_factory=lambda v: MapOperation.put(b, key, v, _DEFAULT_MAP_POLICY).set_context(ctx_l),
+            set_to_factory=lambda v, mp: MapOperation.put(b, key, v, mp).set_context(ctx_l),
             add_factory=lambda v: MapOperation.increment_value(b, key, v, _DEFAULT_MAP_POLICY).set_context(ctx_l),
             rt_cls=MapReturnType, is_map=True,
             ctx=new_ctx, to_ctx=to_ctx,
@@ -548,24 +574,61 @@ class CdtWriteBuilder(_RemoveMixin, CdtReadBuilder[T]):
 
     # -- Write terminals ------------------------------------------------------
 
-    def set_to(self, value: Any) -> T:
+    def set_to(
+        self, value: Any,
+        *,
+        create_only: bool = False,
+        update_only: bool = False,
+        no_fail: bool = False,
+        order: MapOrder | None = None,
+        persist_index: bool = False,
+    ) -> T:
         """Set the value at the current CDT path.
 
-        Requires prior ``on_map_key()`` navigation.
+        Requires prior ``on_map_key()`` navigation. Without keyword flags this
+        is an unconditional put: the entry is created when absent and replaced
+        when present.
 
         Args:
             value: New value to store.
+            create_only: Write only when the key is absent; fail with
+                ``ELEMENT_EXISTS`` when it is present. Mutually exclusive
+                with ``update_only``.
+            update_only: Write only when the key is present; fail with
+                ``ELEMENT_NOT_FOUND`` when it is absent. Mutually exclusive
+                with ``create_only``.
+            no_fail: Turn the ``create_only`` / ``update_only`` failure into
+                a silent no-op.
+            order: Key order for the map when this write creates it.
+            persist_index: Maintain a persistent index on the map. Applies to
+                top-level maps only; the server ignores it on a nested map.
 
         Example::
 
             .bin("m").on_map_key("color").set_to("blue")
+            .bin("m").on_map_key("color").set_to("blue", create_only=True, no_fail=True)
+
+        Returns:
+            The parent builder for chaining.
 
         Raises:
             TypeError: If not preceded by ``on_map_key()`` navigation.
+            ValueError: If both ``create_only`` and ``update_only`` are set.
+
+        See Also:
+            :meth:`map_insert_items`, :meth:`map_update_items`,
+            :meth:`map_upsert_items` for the multi-entry forms.
         """
         if self._set_to_factory is None:
             raise TypeError("set_to() requires on_map_key() navigation")
-        op = self._set_to_factory(value)
+        if create_only or update_only or no_fail or persist_index or order is not None:
+            policy = _resolve_map_entry_policy(
+                create_only=create_only, update_only=update_only, no_fail=no_fail,
+                order=order, persist_index=persist_index,
+            )
+        else:
+            policy = _DEFAULT_MAP_POLICY
+        op = self._set_to_factory(value, policy)
         self._parent.add_operation(op)  # type: ignore[union-attr]
         return self._parent
 
