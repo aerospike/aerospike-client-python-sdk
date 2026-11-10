@@ -16,7 +16,7 @@
 """Integration tests for sync CDT write operations: list_add, append, pop, trim, remove, exists."""
 
 import pytest
-from aerospike_sdk import ListOrderType, ListSortFlags, MapOrder
+from aerospike_sdk import ListOrderType, ListSortFlags, MapOrder, SortedMap
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 from aerospike_sdk import DataSet
@@ -715,6 +715,24 @@ class TestMapCollectionOps:
             session.update(k).bin("m").map_update_items({"b": 2}).execute()
         assert exc_info.value.result_code == ResultCode.ELEMENT_NOT_FOUND
 
+    def test_set_to_create_only_rejects_existing_key(self, cluster):
+        """Sync smoke for the set_to flags: create_only rejects a present key; no_fail no-ops."""
+        session = cluster.create_session()
+        k = DS.id(63)
+        session.upsert(k).put({"m": {"a": 1}}).execute()
+
+        with pytest.raises(AerospikeError) as exc_info:
+            session.update(k).bin("m").on_map_key("a").set_to(
+                2, create_only=True,
+            ).execute()
+        assert exc_info.value.result_code == ResultCode.ELEMENT_EXISTS
+
+        session.update(k).bin("m").on_map_key("a").set_to(
+            2, create_only=True, no_fail=True,
+        ).execute()
+        result = session.query(k).execute().first_or_raise()
+        assert result.record.bins["m"] == {"a": 1}
+
     def test_map_create_then_upsert_key_ordered(self, cluster):
         session = cluster.create_session()
         k = DS.id(38)
@@ -724,7 +742,9 @@ class TestMapCollectionOps:
         session.update(k).bin("ord").map_upsert_items({"c": 3, "a": 1, "b": 2}).execute()
 
         result = session.query(k).execute().first_or_raise()
-        assert list(result.record.bins["ord"].keys()) == ["a", "b", "c"]
+        m = result.record.bins["ord"]
+        assert isinstance(m, SortedMap)
+        assert list(m.keys()) == ["a", "b", "c"]
 
     def test_map_set_policy_key_ordered(self, cluster):
         session = cluster.create_session()

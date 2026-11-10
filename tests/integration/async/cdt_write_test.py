@@ -732,6 +732,83 @@ class TestMapCollectionOps:
             await session.update(k).bin("m").map_update_items({"b": 2}).execute()
         assert exc_info.value.result_code == ResultCode.ELEMENT_NOT_FOUND
 
+    async def test_set_to_create_only_new_key(self, cluster):
+        session = cluster.create_session()
+        k = DS.id(62)
+        await session.upsert(k).put({"m": {"a": 1}}).execute()
+
+        await session.update(k).bin("m").on_map_key("b").set_to(2, create_only=True).execute()
+
+        result = await (await session.query(k).execute()).first_or_raise()
+        assert result.record.bins["m"] == {"a": 1, "b": 2}
+
+    async def test_set_to_create_only_rejects_existing_key(self, cluster):
+        """create_only refuses to overwrite a present key; no_fail makes that a no-op."""
+        session = cluster.create_session()
+        k = DS.id(63)
+        await session.upsert(k).put({"m": {"a": 1}}).execute()
+
+        with pytest.raises(AerospikeError) as exc_info:
+            await session.update(k).bin("m").on_map_key("a").set_to(
+                2, create_only=True,
+            ).execute()
+        assert exc_info.value.result_code == ResultCode.ELEMENT_EXISTS
+
+        await session.update(k).bin("m").on_map_key("a").set_to(
+            2, create_only=True, no_fail=True,
+        ).execute()
+        result = await (await session.query(k).execute()).first_or_raise()
+        assert result.record.bins["m"] == {"a": 1}
+
+    async def test_set_to_update_only_existing_key(self, cluster):
+        session = cluster.create_session()
+        k = DS.id(64)
+        await session.upsert(k).put({"m": {"a": 1, "b": 2}}).execute()
+
+        await session.update(k).bin("m").on_map_key("a").set_to(10, update_only=True).execute()
+
+        result = await (await session.query(k).execute()).first_or_raise()
+        assert result.record.bins["m"] == {"a": 10, "b": 2}
+
+    async def test_set_to_update_only_rejects_missing_key(self, cluster):
+        """update_only refuses to create an absent key; no_fail makes that a no-op."""
+        session = cluster.create_session()
+        k = DS.id(65)
+        await session.upsert(k).put({"m": {"a": 1}}).execute()
+
+        with pytest.raises(AerospikeError) as exc_info:
+            await session.update(k).bin("m").on_map_key("b").set_to(
+                2, update_only=True,
+            ).execute()
+        assert exc_info.value.result_code == ResultCode.ELEMENT_NOT_FOUND
+
+        await session.update(k).bin("m").on_map_key("b").set_to(
+            2, update_only=True, no_fail=True,
+        ).execute()
+        result = await (await session.query(k).execute()).first_or_raise()
+        assert result.record.bins["m"] == {"a": 1}
+
+    async def test_set_to_order_applies_when_write_creates_map(self, cluster):
+        """The map this write creates decodes as a sorted map, not a plain dict."""
+        session = cluster.create_session()
+        k = DS.id(66)
+        await session.upsert(k).put({"p": 1}).execute()
+
+        await session.update(k).bin("ord").on_map_key("c").set_to(
+            3, create_only=True, order=MapOrder.KEY_ORDERED,
+        ).execute()
+        await (
+            session.update(k)
+            .bin("ord").on_map_key("a").set_to(1)
+            .bin("ord").on_map_key("b").set_to(2)
+            .execute()
+        )
+
+        result = await (await session.query(k).execute()).first_or_raise()
+        m = result.record.bins["ord"]
+        assert isinstance(m, SortedMap)
+        assert list(m.keys()) == ["a", "b", "c"]
+
     async def test_map_create_then_upsert_key_ordered(self, cluster):
         session = cluster.create_session()
         k = DS.id(38)
@@ -743,7 +820,9 @@ class TestMapCollectionOps:
         ).execute()
 
         result = await (await session.query(k).execute()).first_or_raise()
-        assert list(result.record.bins["ord"].keys()) == ["a", "b", "c"]
+        m = result.record.bins["ord"]
+        assert isinstance(m, SortedMap)
+        assert list(m.keys()) == ["a", "b", "c"]
 
     async def test_map_set_policy_key_ordered(self, cluster):
         session = cluster.create_session()

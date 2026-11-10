@@ -113,6 +113,7 @@ from aerospike_sdk.aio.operations.cdt_read import (
 from aerospike_sdk.aio.operations.cdt_write import (
     CdtWriteBuilder,
     CdtWriteInvertableBuilder,
+    _DEFAULT_MAP_POLICY,
     _UNORDERED_LIST_POLICY,
     _resolve_list_policy,
     _resolve_map_policy,
@@ -4921,7 +4922,6 @@ class _BinWriteSteps(Generic[_W]):
             :class:`CdtWriteBuilder` for writing the targeted element(s).
         """
         b = self._bin
-        _mp = MapPolicy(None, None)
         if create_type is not None:
             to_ctx = lambda: CTX.map_key_create(key, create_type)
         else:
@@ -4932,8 +4932,8 @@ class _BinWriteSteps(Generic[_W]):
             lambda rt: MapOperation.remove_by_key(b, key, rt),
             MapReturnType, is_map=True,
             bin_name=b, to_ctx=to_ctx,
-            set_to_factory=lambda v: MapOperation.put(b, key, v, _mp),
-            add_factory=lambda v: MapOperation.increment_value(b, key, v, _mp),
+            set_to_factory=lambda v, mp: MapOperation.put(b, key, v, mp),
+            add_factory=lambda v: MapOperation.increment_value(b, key, v, _DEFAULT_MAP_POLICY),
         )
 
     def on_map_rank(self, rank: int) -> CdtWriteBuilder[_W]:
@@ -5174,9 +5174,13 @@ class _BinWriteSteps(Generic[_W]):
 
         Returns:
             :class:`CdtWriteBuilder` for writing the targeted element(s).
+            Writing an element by index is the collection-level
+            ``list_set(index, value)`` on the bin, not a terminal on this
+            navigation.
 
         Example::
-            .bin("items").on_list_index(0).set_to("first")
+
+            .bin("items").on_list_index(-1).remove()
         """
         b = self._bin
         use_create = order is not None or pad
