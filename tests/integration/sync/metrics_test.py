@@ -23,6 +23,7 @@ from aerospike_sdk.sync import ClusterDefinition
 
 from tests.integration.general_auth import apply_general_auth, general_auth_enabled
 from aerospike_sdk.metrics import MetricsExporterType
+from aerospike_sdk.metrics.policy import _ALL_COMMAND_TYPES
 from aerospike_sdk.policy.system_settings import MetricsSettings, SystemSettings
 
 from tests.integration.namespace import general_namespace
@@ -61,6 +62,12 @@ def _do_some_ops(cluster, count):
         assert first.is_ok
 
 
+def _command_counts(cluster):
+    """Whole-call sample count per command type, for before/after deltas."""
+    aggregated = cluster.metrics_snapshot().cluster_aggregated
+    return {ct: aggregated.command_histogram(ct).count for ct in _ALL_COMMAND_TYPES}
+
+
 class TestSyncMetrics:
 
     def test_enable_disable_round_trip(self, metrics_cluster):
@@ -69,6 +76,34 @@ class TestSyncMetrics:
         assert metrics_cluster.metrics_enabled() is True
         metrics_cluster.disable_metrics()
         assert metrics_cluster.metrics_enabled() is False
+
+    def test_batch_records_the_batch_command_types(self, metrics_cluster):
+        """A multi-key call goes out as one batch, not as its individual keys.
+
+        The sync query builder decides the dispatch on its own, so the
+        recorded command type is the one observer of what it chose.
+        """
+        metrics_cluster.enable_metrics(_SHAPE_SAFE)
+        session = metrics_cluster.create_session()
+        ds = DataSet.of(general_namespace(), "sdk_metrics_batch")
+        keys = [ds.id(f"b{i}") for i in range(5)]
+        for key in keys:
+            session.upsert(key).put({"n": 1}).execute()
+        before = _command_counts(metrics_cluster)
+
+        rows = list(session.query(*keys).execute())
+        assert len(rows) == 5
+
+        after = _command_counts(metrics_cluster)
+        batch_reads = after[CommandType.BATCH_READ] - before[CommandType.BATCH_READ]
+        assert batch_reads >= 1, "a multi-key read should record as BATCH_READ"
+        # One batch call is one measurement, not one per key.
+        assert batch_reads < len(keys)
+        # The call lands in its own histogram and leaves every other type alone.
+        for command_type in _ALL_COMMAND_TYPES:
+            if command_type != CommandType.BATCH_READ:
+                assert after[command_type] == before[command_type], command_type
+        metrics_cluster.disable_metrics()
 
     def test_snapshot_and_derived_views(self, metrics_cluster):
         metrics_cluster.enable_metrics(_SHAPE_SAFE)

@@ -36,6 +36,12 @@ from tests.integration.query_selection_helpers import (
 )
 from tests.pnc_compat import requires_query_selection
 
+# The HARD_HINT wire flag stays; only the public QueryHint.hard_hint field is
+# deprecated. Its warning is asserted once in tests/unit/query_hint_test.py.
+pytestmark = pytest.mark.filterwarnings(
+    "ignore:QueryHint.hard_hint is deprecated:DeprecationWarning"
+)
+
 INDEX_ONLY = Behavior.DEFAULT.derive_with_changes(
     name="index_only_sync",
     reads_query=Settings(allow_scans_with_where=False),
