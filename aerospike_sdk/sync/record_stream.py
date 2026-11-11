@@ -161,11 +161,7 @@ class RecordStream:
         def _gen() -> Iterator[RecordResult]:
             try:
                 for record in recordset:
-                    # Read once: each access builds a new Key.
-                    key = record.key
-                    if key is None:
-                        key = Key("", "", 0)
-                    yield _ok_result(key, record)
+                    yield _ok_result(record)
             except Exception as e:
                 raise _convert_pnc_exception(e) from e
             finally:
@@ -438,12 +434,8 @@ def _chunked_iter(
         for record in recordset:
             if 0 < limit <= counter[0]:
                 return
-            # Read once: each access builds a new Key.
-            key = record.key
-            if key is None:
-                key = Key("", "", 0)
             counter[0] += 1
-            yield _ok_result(key, record)
+            yield _ok_result(record)
     except Exception as e:
         raise _convert_pnc_exception(e) from e
 

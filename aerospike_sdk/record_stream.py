@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, AsyncIterator, Awaitable, Callable, Sequence
 
-from aerospike_native import Key, PartitionFilter, Record
+from aerospike_native import Key, PartitionFilter, Record, _ready_step
 from aerospike_native.exceptions import ResultCode
 
 from aerospike_sdk.exceptions import (
@@ -37,6 +37,12 @@ if TYPE_CHECKING:  # Not unused — needed for forward-reference type annotation
 from aerospike_sdk.loggers import SdkLoggers
 
 log = logging.getLogger(SdkLoggers.RECORD_STREAM)
+
+# Records taken from a PNC Recordset per await. The consumer works through a
+# whole batch before the event loop gets another turn, so the size trades
+# other tasks' latency against nothing much: throughput is flat from 16 up,
+# while larger batches lengthen each hold on the loop.
+_RECORDSET_BATCH = 16
 
 
 class _SingleResultIter:
@@ -56,6 +62,74 @@ class _SingleResultIter:
             raise StopAsyncIteration
         self._result = None
         return r
+
+
+class _RecordsetRows:
+    """Async iterator turning a PNC ``Recordset``'s records into OK rows.
+
+    A class, not an async generator: a row already in hand is returned
+    through a completed awaitable, which costs far less per row than
+    resuming a generator frame. Only a refill runs a coroutine.
+    """
+
+    __slots__ = ("_recordset", "_pending", "_refilling", "_closed")
+
+    def __init__(self, recordset: Any) -> None:
+        self._recordset = recordset
+        self._pending: Any = iter(())
+        self._refilling = False
+        self._closed = False
+
+    def __aiter__(self) -> _RecordsetRows:
+        return self
+
+    def __anext__(self) -> Awaitable[RecordResult]:
+        for record in self._pending:
+            return _ready_step(_ok_result(record))
+        if self._refilling:
+            # A second consumer's refill would replace the first one's batch
+            # and drop its unread rows.
+            raise RuntimeError("RecordStream is already being iterated by another task")
+        return self._refill()
+
+    async def _refill(self) -> RecordResult:
+        if self._closed:
+            raise StopAsyncIteration
+        recordset = self._recordset
+        self._refilling = True
+        try:
+            batch = await recordset._next_batch(_RECORDSET_BATCH)
+        except Exception as e:
+            recordset.close()
+            raise _convert_pnc_exception(e) from e
+        except BaseException:
+            # Cancelled mid-wait: the consumer is gone, so stop the query.
+            recordset.close()
+            raise
+        finally:
+            self._refilling = False
+        if not batch:
+            recordset.close()
+            raise StopAsyncIteration
+        pending = iter(batch)
+        row = _ok_result(next(pending))
+        self._pending = pending
+        return row
+
+    def close(self) -> None:
+        # Unread rows of the current batch are dropped too, so a loop that
+        # holds this iterator ends at its next step.
+        self._closed = True
+        self._pending = iter(())
+        self._recordset.close()
+
+    def __del__(self) -> None:
+        # Dropped without being drained or closed: release the query rather
+        # than leave it running until the recordset itself is collected.
+        try:
+            self._recordset.close()
+        except Exception:
+            pass
 
 
 class RecordStream:
@@ -198,21 +272,16 @@ class RecordStream:
 
         Each yielded ``Record`` is converted to a :class:`RecordResult` with
         ``result_code=OK`` and ``index=-1`` (queries have no positional index).
+
+        Records are pulled in batches, which spares an await per record. PNC
+        counts a whole batch as read the moment it hands it over, so this
+        adapter is only for streams whose partition cursor is never read
+        back; the chunked adapter, which resumes from that cursor, pulls one
+        record at a time.
         """
-        async def _iter() -> AsyncIterator[RecordResult]:
-            try:
-                async for record in recordset:
-                    # Read once: each access builds a new Key.
-                    key = record.key
-                    if key is None:
-                        key = Key("", "", 0)
-                    yield _ok_result(key, record)
-            except Exception as e:
-                raise _convert_pnc_exception(e) from e
-            finally:
-                recordset.close()
-        inst = cls(_iter())
-        inst._closeable = recordset
+        rows = _RecordsetRows(recordset)
+        inst = cls(rows)
+        inst._closeable = rows
         return inst
 
     @classmethod
@@ -252,12 +321,8 @@ class RecordStream:
                 async for record in recordset:
                     if 0 < limit <= counter[0]:
                         break
-                    # Read once: each access builds a new Key.
-                    key = record.key
-                    if key is None:
-                        key = Key("", "", 0)
                     counter[0] += 1
-                    yield _ok_result(key, record)
+                    yield _ok_result(record)
             except Exception as e:
                 raise _convert_pnc_exception(e) from e
 
@@ -307,8 +372,13 @@ class RecordStream:
 
     # -- async iteration -----------------------------------------------------
 
-    def __aiter__(self) -> RecordStream:
-        """Return ``self`` for ``async for`` iteration."""
+    def __aiter__(self) -> AsyncIterator[RecordResult]:
+        """Return the iterator ``async for`` steps through."""
+        # A query's rows are stepped directly, which spares a call per row.
+        # close() reaches that iterator too, so the loop still ends there.
+        source = self._source
+        if type(source) is _RecordsetRows and not self._closed:
+            return source
         return self
 
     def __anext__(self) -> Awaitable[RecordResult]:

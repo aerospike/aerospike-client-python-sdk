@@ -528,9 +528,13 @@ class TestRepr:
 class TestOkResult:
     """The lean constructor query streams use for successful rows."""
 
+    @staticmethod
+    def _keyed_record(key=None):
+        return SimpleNamespace(bins={"a": 1}, key=key)
+
     def test_equals_the_full_constructor(self):
-        rec = _record()
-        lean = _ok_result(_key(), rec)
+        rec = self._keyed_record(_key())
+        lean = _ok_result(rec)
         full = RecordResult(key=_key(), record=rec, result_code=ResultCode.OK)
         assert lean == full
         for field in dataclasses.fields(RecordResult):
@@ -538,7 +542,7 @@ class TestOkResult:
         assert repr(lean) == repr(full)
 
     def test_unstored_fields_read_as_defaults(self):
-        row = _ok_result(_key(), _record())
+        row = _ok_result(self._keyed_record(_key()))
         assert row.is_ok
         assert row.in_doubt is False
         assert row.index == -1
@@ -548,11 +552,49 @@ class TestOkResult:
         assert row.server_message is None
         assert row.exp_trace is None
 
+    def test_key_is_built_on_first_read_and_kept(self):
+        reads = 0
+
+        class _CountingRecord:
+            bins = {"a": 1}
+
+            @property
+            def key(self):
+                nonlocal reads
+                reads += 1
+                return _key(7)
+
+        row = _ok_result(_CountingRecord())
+        assert row.is_ok
+        assert reads == 0
+        first = row.key
+        assert first == _key(7)
+        assert row.key is first
+        assert reads == 1
+
+    def test_record_without_a_key_gets_the_empty_key(self):
+        assert _ok_result(self._keyed_record(None)).key == Key("", "", 0)
+
     def test_replace_keeps_working(self):
-        row = dataclasses.replace(_ok_result(_key(), _record()), index=3)
+        row = dataclasses.replace(_ok_result(self._keyed_record(_key())), index=3)
         assert row.index == 3
+        assert row.key == _key()
         assert row.result_code == ResultCode.OK
 
     def test_unknown_attribute_still_raises(self):
         with pytest.raises(AttributeError):
-            _ok_result(_key(), _record()).no_such_field
+            _ok_result(self._keyed_record(_key())).no_such_field
+
+
+class TestIsOkCodeComparison:
+    """is_ok takes an identity shortcut; an equal code from elsewhere still counts."""
+
+    def test_equal_but_distinct_ok_code(self):
+        class _EqualToOk:
+            def __eq__(self, other):
+                return other is ResultCode.OK
+
+        assert RecordResult(_key(), _record(), _EqualToOk()).is_ok
+
+    def test_other_code_is_not_ok(self):
+        assert not RecordResult(_key(), None, ResultCode.KEY_NOT_FOUND_ERROR).is_ok

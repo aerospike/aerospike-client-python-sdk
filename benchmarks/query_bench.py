@@ -36,9 +36,10 @@ Modes:
 * ``legacy-sync`` — legacy C-extension ``query().results()``, ``-z`` OS
   threads sharing one client.
 
-``--point-readers N`` (``pnc-async`` only) adds N tasks doing point reads on
-the same client and event loop, and reports their latency: a stream consumer
-that never yields to the loop shows up as point-read tail latency.
+``--point-readers N`` (``pnc-async`` and ``psdk-async``) adds N tasks doing
+point reads on the same client and event loop, and reports their latency: a
+stream consumer that never yields to the loop shows up as point-read tail
+latency.
 
 Example::
 
@@ -109,7 +110,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("-z", "--concurrency", type=int, default=1,
                    help="async tasks (async modes) or OS threads (others)")
     p.add_argument("--point-readers", type=int, default=0, metavar="N",
-                   help="point-read tasks sharing the client and loop (pnc-async only)")
+                   help="point-read tasks sharing the client and loop (pnc-async, psdk-async)")
     p.add_argument("-d", "--duration", type=float, default=20.0, help="measured seconds")
     p.add_argument("--warmup", type=float, default=3.0, help="unmeasured seconds first")
     p.add_argument("--records", type=int, default=200_000,
@@ -118,8 +119,8 @@ def parse_args() -> argparse.Namespace:
                    help="truncate, write N records, create the index, then exit")
     p.add_argument("--payload", type=int, default=256, help="payload bytes per record (load)")
     args = p.parse_args()
-    if args.point_readers and args.mode != "pnc-async":
-        p.error("--point-readers requires --mode pnc-async")
+    if args.point_readers and args.mode not in ("pnc-async", "psdk-async"):
+        p.error("--point-readers requires --mode pnc-async or psdk-async")
     if args.mode == "legacy-sync" and aerospike is None:
         p.error("legacy-sync needs the legacy aerospike package")
     return args
@@ -229,7 +230,9 @@ async def psdk_async_query(args: argparse.Namespace) -> Tuple[QueryFn, CloseFn, 
                 count += 1
         return count
 
-    return one_query, cluster.close, None
+    # Point readers must share the session's PNC client: a stream's fairness
+    # yield delivers finished operations for its own client only.
+    return one_query, cluster.close, cluster._sdk_client.underlying_client
 
 
 async def psdk_batch_stream_query(args: argparse.Namespace) -> Tuple[QueryFn, CloseFn, object]:

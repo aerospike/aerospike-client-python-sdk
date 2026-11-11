@@ -15,6 +15,9 @@
 
 """Tests for RecordStream."""
 
+import gc
+import asyncio
+import itertools
 import pytest
 from types import SimpleNamespace
 from typing import AsyncIterator
@@ -220,6 +223,7 @@ class _FakeRecordset:
     def __init__(self, recs):
         self._recs = iter(recs)
         self.close_calls = 0
+        self.batch_sizes = []
 
     def __aiter__(self):
         return self
@@ -229,6 +233,10 @@ class _FakeRecordset:
             return next(self._recs)
         except StopIteration:
             raise StopAsyncIteration
+
+    async def _next_batch(self, max_records):
+        self.batch_sizes.append(max_records)
+        return list(itertools.islice(self._recs, max_records))
 
     def close(self):
         self.close_calls += 1
@@ -246,6 +254,114 @@ class TestFromRecordset:
         assert all(r.is_ok for r in results)
         assert results[0].record is rec1
 
+    async def test_spans_several_batches_in_order(self):
+        recs = [SimpleNamespace(bins={"n": i}, key=_key(i)) for i in range(100)]
+        fake = _FakeRecordset(recs)
+        stream = RecordStream._from_pnc_recordset(fake)
+        results = await stream.collect()
+        assert [r.record for r in results] == recs
+        assert len(fake.batch_sizes) > 1
+        assert fake.close_calls >= 1
+
+    async def test_break_mid_batch_then_continue_loses_no_record(self):
+        recs = [SimpleNamespace(bins={"n": i}, key=_key(i)) for i in range(10)]
+        stream = RecordStream._from_pnc_recordset(_FakeRecordset(recs))
+        seen = []
+        async for row in stream:
+            seen.append(row.record)
+            if len(seen) == 3:
+                break
+        seen.extend(row.record for row in await stream.collect())
+        assert seen == recs
+
+    async def test_close_inside_loop_ends_it_mid_batch(self):
+        recs = [SimpleNamespace(bins={"n": i}, key=_key(i)) for i in range(10)]
+        fake = _FakeRecordset(recs)
+        stream = RecordStream._from_pnc_recordset(fake)
+        seen = []
+        async for row in stream:
+            seen.append(row.record)
+            if len(seen) == 3:
+                stream.close()
+        assert seen == recs[:3]
+        assert fake.close_calls >= 1
+        assert await stream.collect() == []
+
+    async def test_closed_stream_yields_nothing_to_a_new_loop(self):
+        recs = [SimpleNamespace(bins={"n": i}, key=_key(i)) for i in range(3)]
+        stream = RecordStream._from_pnc_recordset(_FakeRecordset(recs))
+        stream.close()
+        assert [row async for row in stream] == []
+
+    async def test_chunked_stream_pulls_one_record_at_a_time(self):
+        recs = [SimpleNamespace(bins={"n": i}, key=_key(i)) for i in range(5)]
+        fake = _FakeRecordset(recs)
+        stream = RecordStream._from_chunked_pnc_recordset(fake, reexecute=None)
+        assert len(await stream.collect()) == 5
+        # Its cursor is read back, so it must never take a batch.
+        assert fake.batch_sizes == []
+
+    async def test_buffered_row_resolves_without_suspending(self):
+        recs = [SimpleNamespace(bins={"n": i}, key=_key(i)) for i in range(3)]
+        stream = RecordStream._from_pnc_recordset(_FakeRecordset(recs))
+        assert (await stream.__anext__()).record is recs[0]
+        steps = stream.__anext__().__await__()
+        with pytest.raises(StopIteration) as stop:
+            next(steps)
+        assert stop.value.value.record is recs[1]
+
+    async def test_second_consumer_during_a_refill_is_refused(self):
+        release = asyncio.Event()
+
+        class _SlowRecordset(_FakeRecordset):
+            async def _next_batch(self, max_records):
+                await release.wait()
+                return await super()._next_batch(max_records)
+
+        recs = [SimpleNamespace(bins={"n": i}, key=_key(i)) for i in range(2)]
+        stream = RecordStream._from_pnc_recordset(_SlowRecordset(recs))
+        first = asyncio.ensure_future(stream.__anext__())
+        await asyncio.sleep(0)
+        with pytest.raises(RuntimeError):
+            stream.__anext__()
+        release.set()
+        assert (await first).record is recs[0]
+        assert (await stream.__anext__()).record is recs[1]
+
+    async def test_cancelled_refill_closes_the_recordset(self):
+        class _StuckRecordset(_FakeRecordset):
+            async def _next_batch(self, max_records):
+                await asyncio.Event().wait()
+
+        fake = _StuckRecordset([])
+        stream = RecordStream._from_pnc_recordset(fake)
+        waiter = asyncio.ensure_future(stream.__anext__())
+        await asyncio.sleep(0)
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        assert fake.close_calls >= 1
+
+    async def test_refill_error_is_converted_and_closes(self):
+        class _FailingRecordset(_FakeRecordset):
+            async def _next_batch(self, max_records):
+                raise ValueError("boom")
+
+        fake = _FailingRecordset([])
+        stream = RecordStream._from_pnc_recordset(fake)
+        with pytest.raises(Exception) as raised:
+            await stream.__anext__()
+        assert isinstance(raised.value.__cause__, ValueError)
+        assert fake.close_calls >= 1
+
+    async def test_abandoned_stream_closes_the_recordset(self):
+        fake = _FakeRecordset([SimpleNamespace(bins={"n": 1}, key=_key(1))])
+        stream = RecordStream._from_pnc_recordset(fake)
+        await stream.__anext__()
+        del stream
+        gc.collect()
+        assert fake.close_calls >= 1
+
     async def test_empty_recordset(self):
         stream = RecordStream._from_pnc_recordset(_FakeRecordset([]))
         assert await stream.collect() == []
@@ -257,23 +373,6 @@ class TestFromRecordset:
         assert len(results) == 1
         assert results[0].record is rec
         assert results[0].key == Key("", "", 0)
-
-    async def test_key_is_read_once_per_record(self):
-        reads = 0
-
-        class _CountingRecord:
-            bins = {"a": 1}
-
-            @property
-            def key(self):
-                nonlocal reads
-                reads += 1
-                return _key(1)
-
-        stream = RecordStream._from_pnc_recordset(_FakeRecordset([_CountingRecord()]))
-        results = await stream.collect()
-        assert results[0].key == _key(1)
-        assert reads == 1
 
     async def test_rows_equal_fully_constructed_results(self):
         rec = SimpleNamespace(bins={"a": 1}, key=_key(1))
