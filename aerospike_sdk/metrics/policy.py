@@ -187,6 +187,10 @@ class MetricsPolicy:
         self.labels = dict(labels) if labels is not None else {}
         self.usage_enabled = usage_enabled
 
+    def _fields(self) -> Dict[str, Any]:
+        """Every setting by constructor keyword, for comparing and layering policies."""
+        return {name: getattr(self, name) for name in self.__slots__}
+
     def _to_pnc(self) -> _PncMetricsPolicy:
         """Translate to the PNC policy.
 
@@ -212,19 +216,26 @@ class MetricsPolicy:
         )
 
 
-def _policy_from_settings(settings: "MetricsSettings") -> MetricsPolicy:
+def _policy_from_settings(
+    settings: "MetricsSettings", base: Optional[MetricsPolicy] = None,
+) -> MetricsPolicy:
     """Build a :class:`MetricsPolicy` from configuration-file settings.
 
-    Fields the file did not set keep the policy default, so a block naming
-    only ``enabled`` still gets the standard millisecond histogram.
+    Fields the settings do not set fall through to ``base``, so a block
+    naming only ``enabled`` still gets the standard millisecond histogram,
+    and removing a key from the file restores the base's value. ``labels``
+    is one field: when set it replaces the base's labels rather than adding
+    to them.
 
     Args:
         settings: The ``system.<cluster>.metrics`` group.
+        base: The policy beneath the settings, normally the one code passed
+            to ``enable_metrics``. ``None`` means the policy defaults.
 
     Returns:
         The equivalent policy.
     """
-    kwargs: Dict[str, Any] = {}
+    kwargs: Dict[str, Any] = base._fields() if base is not None else {}
     if settings.operational_enabled is not None:
         kwargs["operational_enabled"] = settings.operational_enabled
     if settings.latency_unit is not None:
@@ -249,10 +260,14 @@ def _policy_from_settings(settings: "MetricsSettings") -> MetricsPolicy:
 def _apply_metrics_settings(underlying_client: Any, settings: "MetricsSettings") -> None:
     """Turn core metrics on or off to match *settings*.
 
-    A block that never names ``enabled`` leaves collection exactly as it is —
-    so a file that configures only the histogram shape does not switch
-    collection on by itself, and a client that enabled metrics in code is not
-    silently switched off by a file that is silent on the subject.
+    The reload path for a client whose cluster has been collected, and only
+    that. Unlike the cluster's own reload, it applies the switch alone: the
+    policy code passed to ``enable_metrics`` and the export push both lived
+    on the cluster, so there is no code layer to lay the file's keys over.
+    Re-shaping collection here would replace code's labels and histogram
+    shape with defaults, so a block silent on ``enabled`` leaves collection
+    exactly as it is, and turning it on builds from the file over the
+    defaults.
 
     Args:
         underlying_client: The PNC client to enable or disable collection on.

@@ -47,7 +47,8 @@ from aerospike_sdk import capabilities
 from aerospike_sdk.exceptions import AerospikeError, PncAerospikeError, _convert_pnc_exception
 from aerospike_sdk.metrics import MetricsPolicy, MetricsSnapshot
 from aerospike_sdk.metrics.export import MetricsExporterType, export_mode
-from aerospike_sdk.metrics.snapshot import ProcessSampler
+from aerospike_sdk.metrics.policy import _policy_from_settings
+from aerospike_sdk.metrics.snapshot import DepartedNodes, ProcessSampler
 from aerospike_sdk.metrics.usage import COMMAND_COUNT
 from aerospike_sdk.node_shared import NodeBase
 from aerospike_sdk.policy.behavior import Behavior
@@ -1049,7 +1050,13 @@ class ClusterBase(Generic[_S, _TS, _N]):
     # Set by each leaf's ``__init__`` / ``enable_metrics``; read by
     # :meth:`metrics_snapshot` and the export timer.
     _metrics_policy: Optional[MetricsPolicy]
+    # The policy code last passed to ``enable_metrics``, ``None`` for the
+    # defaults: the layer configured metrics keys are laid over.
+    _code_metrics_policy: Optional[MetricsPolicy]
+    # The export settings the running timer was started with.
+    _export_settings: Optional[tuple]
     _process_sampler: ProcessSampler
+    _departed_nodes: DepartedNodes
     _exporters: list
     _installed_exporter: Any
 
@@ -1291,6 +1298,10 @@ class ClusterBase(Generic[_S, _TS, _N]):
         gauges are point-in-time. Snapshotting drains and aggregates per-node
         state, so poll at an export interval rather than per operation.
 
+        ``nodes_departed`` lists every node that left the cluster and that
+        some exporter has yet to receive. Pulling a snapshot never consumes
+        a departure; only a successful export does.
+
         Returns:
             A :class:`~aerospike_sdk.metrics.MetricsSnapshot`; zeroed counters
             if metrics were never enabled.
@@ -1307,7 +1318,7 @@ class ClusterBase(Generic[_S, _TS, _N]):
         client = self._sdk_client
         pnc = client.underlying_client
         client_policy = client._policy
-        return MetricsSnapshot(
+        snapshot = MetricsSnapshot(
             pnc.metrics(),
             policy=self._metrics_policy,
             nodes=pnc.nodes(),
@@ -1321,6 +1332,90 @@ class ClusterBase(Generic[_S, _TS, _N]):
             metrics_enabled=pnc.metrics_enabled(),
             usage_enabled=client._usage_on,
         )
+        snapshot._mark_departed(self._departed_nodes)
+        return snapshot
+
+    def _metrics_settings(self) -> Any:
+        """The resolved ``metrics`` settings group, or ``None``."""
+        return getattr(getattr(self._sdk_client, "_sdk_settings", None), "metrics", None)
+
+    def _current_export_settings(self) -> Optional[tuple]:
+        """The settings an export timer is built from, for detecting a change."""
+        metrics = self._metrics_settings()
+        if metrics is None:
+            return None
+        return (
+            metrics.export_interval, metrics.exporter,
+            metrics.report_dir, metrics.report_size_limit,
+        )
+
+    def _effective_metrics_policy(self) -> MetricsPolicy:
+        """The policy code passed to ``enable_metrics``, with every configured metrics key laid over it."""
+        metrics = self._metrics_settings()
+        base = self._code_metrics_policy
+        if metrics is None:
+            return base if base is not None else MetricsPolicy()
+        return _policy_from_settings(metrics, base)
+
+    def _metrics_changes(self, effective: MetricsPolicy) -> tuple[bool, bool]:
+        """Whether applying ``effective`` re-enables collection, and whether it restarts the export push.
+
+        Re-enabling restarts the push, and with it the interval, and resets
+        histograms whose shape changed; a reload that changed nothing
+        metrics-related must do neither.
+        """
+        current = self._metrics_policy
+        if (
+            not self._sdk_client.underlying_client.metrics_enabled()
+            or current is None
+            or current._fields() != effective._fields()
+        ):
+            return True, True
+        return False, self._current_export_settings() != self._export_settings
+
+    def _apply_metrics_settings(self, metrics: Any) -> None:
+        """Bring collection in line with configuration-file settings.
+
+        A file that sets ``enabled`` switches collection. One silent on it
+        leaves the switch to code, so a file that tunes only the histogram
+        shape does not switch collection on by itself, but its keys still
+        reshape collection that is already on.
+        """
+        if metrics is None:
+            return
+        if metrics.enabled is False:
+            self._disable_metrics()
+        elif metrics.enabled or self._sdk_client.underlying_client.metrics_enabled():
+            self._enable_metrics()
+
+    def _enable_metrics(self) -> None:
+        """Enable collection under the effective policy, or apply a changed one.
+
+        The configuration-file path, which owns no guard.
+        """
+        effective = self._effective_metrics_policy()
+        reenable, restart = self._metrics_changes(effective)
+        if reenable:
+            # Kept because the snapshot does not carry its own histogram shape,
+            # which the structured export has to report.
+            self._metrics_policy = effective
+            client = self._sdk_client
+            client._usage_on = effective.usage_enabled
+            # The command count is an operational metric; `_record_on` is the
+            # single flag the per-op paths test.
+            client._cmd_count_on = effective.operational_enabled
+            client._record_on = client._usage_on or client._cmd_count_on
+            client.underlying_client.enable_metrics(effective._to_pnc())
+        if restart:
+            self._start_export_timer(effective)
+
+    def _start_export_timer(self, policy: MetricsPolicy) -> None:
+        """(Re)start the export push; per leaf, since the async timer is a task and the sync one a thread."""
+        raise NotImplementedError
+
+    def _disable_metrics(self) -> None:
+        """Disable collection; per leaf, since the closing push is awaited differently."""
+        raise NotImplementedError
 
     def _check_metrics_switch_is_free(self, method: str) -> None:
         """Refuse an API flip of the master switch while a loaded file owns it.

@@ -36,8 +36,7 @@ from aerospike_sdk.metrics.export import (
     SyncMetricsExportTimer,
 )
 from aerospike_sdk.metrics import MetricsPolicy
-from aerospike_sdk.metrics.policy import _policy_from_settings
-from aerospike_sdk.metrics.snapshot import ProcessSampler
+from aerospike_sdk.metrics.snapshot import DepartedNodes, ProcessSampler
 from aerospike_sdk.policy.system_settings import SystemSettings
 from aerospike_sdk.sdk_config_monitor import SdkConfigSource, adopt_discovered_cluster_name
 from aerospike_sdk.sync.client import SyncClient
@@ -84,7 +83,10 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
         """
         self._sdk_client = sdk_client
         self._process_sampler = ProcessSampler()
+        self._departed_nodes = DepartedNodes()
         self._metrics_policy: Optional[MetricsPolicy] = None
+        self._code_metrics_policy: Optional[MetricsPolicy] = None
+        self._export_settings: Optional[tuple] = None
         self._exporters: list = []
         # The exporter this cluster installed from configuration, as opposed
         # to one the application registered: the only one the cluster closes.
@@ -323,19 +325,6 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
             return False
         return True
 
-    def _apply_metrics_settings(self, metrics: Any) -> None:
-        """Turn collection on or off to match configuration-file settings.
-
-        Silent settings leave collection alone, so a file that tunes only the
-        histogram shape does not switch collection on by itself.
-        """
-        if metrics is None or metrics.enabled is None:
-            return
-        if metrics.enabled:
-            self._enable_metrics(_policy_from_settings(metrics))
-        else:
-            self._disable_metrics()
-
     def _start_export_timer(self, policy: MetricsPolicy) -> None:
         """Begin pushing snapshots to the selected exporters.
 
@@ -345,8 +334,8 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
         enabling still takes effect.
         """
         self._stop_export_timer()
-        settings = getattr(self._sdk_client, "_sdk_settings", None)
-        metrics = getattr(settings, "metrics", None)
+        metrics = self._metrics_settings()
+        self._export_settings = self._current_export_settings()
         interval = DEFAULT_EXPORT_INTERVAL_SECONDS
         if metrics is not None and metrics.export_interval is not None:
             interval = metrics.export_interval.total_seconds()
@@ -382,9 +371,13 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
     def enable_metrics(self, policy: Optional[MetricsPolicy] = None) -> None:
         """Enable metrics collection for this cluster.
 
-        Collection is off until enabled. Re-enabling with a changed latency
-        unit or histogram shape discards the accumulated latency samples;
-        counters are retained.
+        Collection is off until enabled. Metrics keys set in the SDK
+        configuration -- a loaded file or the cluster definition's system
+        settings -- are laid over ``policy``, each replacing that one field
+        (``labels`` replaces the whole map), and are re-applied when a reloaded
+        file changes them. Re-enabling with a changed latency unit or histogram
+        shape discards the accumulated latency samples; counters are retained.
+        Re-enabling with an unchanged result does nothing.
 
         Args:
             policy: Collection configuration. Defaults to
@@ -403,22 +396,8 @@ class Cluster(ClusterBase["Session", "TransactionalSession", Node]):
             :meth:`metrics_snapshot`, :meth:`disable_metrics`
         """
         self._check_metrics_switch_is_free("enable_metrics")
-        self._enable_metrics(policy)
-
-    def _enable_metrics(self, policy: Optional[MetricsPolicy] = None) -> None:
-        """Enable collection; the configuration-file path, which owns no guard."""
-        effective = policy if policy is not None else MetricsPolicy()
-        # Kept because the snapshot does not carry its own histogram shape,
-        # which the structured export has to report.
-        self._metrics_policy = effective
-        client = self._sdk_client
-        client._usage_on = effective.usage_enabled
-        # The command count is an operational metric; `_record_on` is the
-        # single flag the per-op paths test.
-        client._cmd_count_on = effective.operational_enabled
-        client._record_on = client._usage_on or client._cmd_count_on
-        client.underlying_client.enable_metrics(effective._to_pnc())
-        self._start_export_timer(effective)
+        self._code_metrics_policy = policy
+        self._enable_metrics()
 
     def disable_metrics(self) -> None:
         """Disable metrics collection. Accumulated data is retained.

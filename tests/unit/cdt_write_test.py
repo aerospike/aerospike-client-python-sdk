@@ -44,6 +44,7 @@ from aerospike_native import ListOperation, MapOperation, MapPolicy
 
 import aerospike_sdk.aio.operations.cdt_read as cdt_read_module
 import aerospike_sdk.aio.operations.cdt_write as cdt_write_module
+import aerospike_sdk.query_shared as query_shared_module
 from aerospike_sdk.aio.operations.cdt_read import (
     CdtReadBuilder,
     CdtReadInvertableBuilder,
@@ -708,6 +709,102 @@ class TestWriteTerminals:
         b = wbb.on_map_key("outer").on_map_index(0)
         with pytest.raises(TypeError, match="set_to.*requires on_map_key"):
             b.set_to(42)
+
+
+class _MapPutCapture:
+    """Stand-in for PNC ``MapOperation`` that records ``put`` policies.
+
+    PNC operations expose no policy getter, so the ``MapPolicy`` a builder
+    emits is captured at the call boundary instead.
+    """
+
+    is_idempotent = False
+
+    def __init__(self):
+        self.policies = []
+
+    def put(self, bin_name, key, value, policy):
+        self.policies.append(policy)
+        return self
+
+    def set_context(self, ctx):
+        return self
+
+
+class TestSetToMapPolicyFlags:
+    """``set_to`` keyword flags compose the map policy handed to PNC."""
+
+    def _build(self, monkeypatch, *, nested):
+        capture = _MapPutCapture()
+        monkeypatch.setattr(query_shared_module, "MapOperation", capture)
+        monkeypatch.setattr(cdt_write_module, "MapOperation", capture)
+        qb = _make_qb()
+        qb._single_key = _make_key()
+        segment = WriteSegmentBuilder(qb)
+        builder = WriteBinBuilder(segment, "m").on_map_key("outer")
+        if nested:
+            builder = builder.on_map_key("inner")
+        return builder, capture
+
+    def _sole_policy(self, capture):
+        assert len(capture.policies) == 1
+        return capture.policies[0]
+
+    @pytest.mark.parametrize("nested", [False, True], ids=["bin_level", "nested"])
+    def test_no_flags_uses_shared_default_policy(self, monkeypatch, nested):
+        b, cap = self._build(monkeypatch, nested=nested)
+        b.set_to("v")
+        assert self._sole_policy(cap) is cdt_write_module._DEFAULT_MAP_POLICY
+
+    @pytest.mark.parametrize("nested", [False, True], ids=["bin_level", "nested"])
+    def test_create_only(self, monkeypatch, nested):
+        b, cap = self._build(monkeypatch, nested=nested)
+        b.set_to("v", create_only=True)
+        assert self._sole_policy(cap).raw_flags == int(MapWriteFlags.CREATE_ONLY)
+
+    @pytest.mark.parametrize("nested", [False, True], ids=["bin_level", "nested"])
+    def test_update_only(self, monkeypatch, nested):
+        b, cap = self._build(monkeypatch, nested=nested)
+        b.set_to("v", update_only=True)
+        assert self._sole_policy(cap).raw_flags == int(MapWriteFlags.UPDATE_ONLY)
+
+    def test_create_only_no_fail(self, monkeypatch):
+        b, cap = self._build(monkeypatch, nested=False)
+        b.set_to("v", create_only=True, no_fail=True)
+        expected = int(MapWriteFlags.CREATE_ONLY) | int(MapWriteFlags.NO_FAIL)
+        assert self._sole_policy(cap).raw_flags == expected
+
+    def test_update_only_no_fail(self, monkeypatch):
+        b, cap = self._build(monkeypatch, nested=False)
+        b.set_to("v", update_only=True, no_fail=True)
+        expected = int(MapWriteFlags.UPDATE_ONLY) | int(MapWriteFlags.NO_FAIL)
+        assert self._sole_policy(cap).raw_flags == expected
+
+    def test_no_fail_alone_keeps_default_mode(self, monkeypatch):
+        b, cap = self._build(monkeypatch, nested=False)
+        b.set_to("v", no_fail=True)
+        assert self._sole_policy(cap).raw_flags == int(MapWriteFlags.NO_FAIL)
+
+    def test_order_and_persist_index(self, monkeypatch):
+        b, cap = self._build(monkeypatch, nested=False)
+        b.set_to("v", order=MapOrder.KEY_ORDERED, persist_index=True)
+        p = self._sole_policy(cap)
+        assert p.order is MapOrder.KEY_ORDERED
+        assert p.persist_index is True
+        assert p.raw_flags == int(MapWriteFlags.DEFAULT)
+
+    def test_create_only_with_order(self, monkeypatch):
+        b, cap = self._build(monkeypatch, nested=False)
+        b.set_to("v", create_only=True, order=MapOrder.KEY_VALUE_ORDERED)
+        p = self._sole_policy(cap)
+        assert p.order is MapOrder.KEY_VALUE_ORDERED
+        assert p.raw_flags == int(MapWriteFlags.CREATE_ONLY)
+
+    def test_both_modes_raise_value_error_before_emitting(self, monkeypatch):
+        b, cap = self._build(monkeypatch, nested=False)
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            b.set_to("v", create_only=True, update_only=True)
+        assert cap.policies == []
 
 
 # ===================================================================

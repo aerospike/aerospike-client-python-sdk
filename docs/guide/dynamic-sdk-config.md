@@ -17,7 +17,7 @@ schemas; they can both be set in the same process without conflict.
 
 ```yaml
 # AEROSPIKE_SDK_CONFIG_URL=file:///etc/aerospike/sdk-config.yaml
-version: "1.0.0"
+version: "1.2.0"
 system:
   DEFAULT:
     connections:
@@ -160,6 +160,10 @@ re-read, re-parsed, and applied without reconnecting.
   every live session bound to them (including sessions on derived child
   behaviors). Nothing is checked on the operation path; in-flight operations
   complete with whichever policy snapshot they started with.
+- **`metrics.*`** — `enabled` switches collection; the other keys reshape
+  collection that is on, laid over the policy code passed to
+  `enable_metrics()`. See
+  {ref}`Configuring metrics from a file <metrics-config-file>`.
 - **`connections.*` / `refresh.tend_interval`** — applied to the connection at
   `connect()`; a change to these takes effect on the next connect.
 - **`discovery.*` / `translation.*`** — also applied at `connect()`; a reload

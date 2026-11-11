@@ -16,8 +16,11 @@
 """Unit tests for metrics export: fan-out, suspension, selection, the file exporter."""
 
 import asyncio
+import gc
 import logging
 import re
+import threading
+import weakref
 from types import SimpleNamespace
 
 import pytest
@@ -34,7 +37,7 @@ from aerospike_sdk.metrics.export import (
     check_exporter,
     export_mode,
 )
-from aerospike_sdk.metrics.export import _NodeCloseTracker
+from aerospike_sdk.metrics.snapshot import MAX_RETAINED_DEPARTED_NODES, DepartedNodes
 from aerospike_sdk.policy.system_settings import MetricsSettings
 
 # A timestamp, then one space, starts every line.
@@ -47,27 +50,36 @@ class _RecordingExporter:
 
     def export(self, snapshot):
         self.calls.append("export")
+        self.departed = snapshot.departed
         if self.raises:
             raise RuntimeError("destination is down")
 
 
 class _StubSnapshot:
-    def __init__(self, doc):
+    def __init__(self, doc, departed=(), sequence=0):
         self._doc = doc
+        self.departed = departed
+        self._departed_sequence = sequence
 
     def to_canonical_dict(self):
         return self._doc
 
-    def _mark_departed(self, tracker):
-        pass
+    def _with_departed(self, hosts):
+        return _StubSnapshot(self._doc, hosts, self._departed_sequence)
 
 
 class _StubCluster:
-    """What the export timer reads: this interval's targets and a snapshot."""
+    """What the export timer reads: this interval's targets and a snapshot.
+
+    ``hosts`` are the hosts the snapshot measured and ``live`` the ones still
+    in the cluster; departures are judged between them, as the cluster does.
+    """
 
     def __init__(self, exporters, doc=None):
         self._exporters = exporters
         self._doc = doc if doc is not None else _DOC
+        self._departed_nodes = DepartedNodes()
+        self.hosts, self.live = [], {}
         self.polls = 0
 
     def _export_targets(self):
@@ -75,7 +87,8 @@ class _StubCluster:
 
     def metrics_snapshot(self):
         self.polls += 1
-        return _StubSnapshot(self._doc)
+        departures = self._departed_nodes.observe(self.hosts, self.live)
+        return _StubSnapshot(self._doc, departures.hosts, departures.sequence)
 
 
 _DOC = {
@@ -100,7 +113,11 @@ _DOC = {
                     "name": "test",
                     "errors": 2, "timeouts": 1, "key_busy": 0,
                     "bytes_in": 10, "bytes_out": 20,
-                    "latency": {"read": [1, 2], "write": [3, 0], "conn": [5, 0]},
+                    "latency": {
+                        "read": {"buckets": [1, 2], "sum": 7.0, "count": 3, "min": 1, "max": 3},
+                        "write": {"buckets": [3, 0], "sum": 2.0, "count": 3, "min": 0, "max": 1},
+                        "conn": {"buckets": [5, 0], "sum": 0.0, "count": 5, "min": 0, "max": 0},
+                    },
                 }
             ],
         }
@@ -201,22 +218,102 @@ class TestExporterSuspension:
         assert len(flaky.calls) == 3
 
 
-class TestNodeCloseTracker:
-    """Departure is judged against the live node list, never a snapshot diff."""
+class TestDepartedNodes:
+    """Departure is judged against the live node list and drained per exporter."""
 
     def test_reports_a_host_missing_from_the_cluster(self):
-        tracker = _NodeCloseTracker()
-        assert tracker.departed(["a:1", "b:2"], ["a:1"]) == ["b:2"]
+        assert DepartedNodes().observe(["a:1", "b:2"], {"a:1": "A"}).hosts == ("b:2",)
 
-    def test_fires_once_per_host(self):
-        tracker = _NodeCloseTracker()
-        tracker.departed(["a:1", "b:2"], ["a:1"])
-        assert tracker.departed(["a:1", "b:2"], ["a:1"]) == []
-
-    def test_a_host_still_in_the_cluster_never_fires(self):
+    def test_a_host_still_in_the_cluster_never_departs(self):
         """The snapshot keeps every host it ever saw, so only the live list shrinks."""
-        tracker = _NodeCloseTracker()
-        assert tracker.departed(["a:1"], ["a:1"]) == []
+        assert DepartedNodes().observe(["a:1"], {"a:1": "A"}).hosts == ()
+
+    def test_each_exporter_is_owed_a_departure_until_it_delivers(self):
+        departures = DepartedNodes()
+        a, b = object(), object()
+        departures.track([a, b])
+        sequence = departures.observe(["a:1"], {}).sequence
+        departures.delivered(a, sequence)
+        assert departures.owed(a, sequence) == ()
+        assert departures.owed(b, sequence) == ("a:1",)
+        # Still retained, so a pull keeps listing it.
+        assert departures.observe(["a:1"], {}).hosts == ("a:1",)
+
+    def test_forgotten_once_every_exporter_delivered(self):
+        departures = DepartedNodes()
+        a, b = object(), object()
+        departures.track([a, b])
+        sequence = departures.observe(["a:1"], {}).sequence
+        departures.delivered(a, sequence)
+        departures.delivered(b, sequence)
+        assert departures.observe(["a:1"], {}).hosts == ()
+
+    def test_a_removed_exporter_stops_holding_departures(self):
+        departures = DepartedNodes()
+        a, b = object(), object()
+        departures.track([a, b])
+        sequence = departures.observe(["a:1"], {}).sequence
+        departures.delivered(a, sequence)
+        departures.track([a])
+        assert departures.observe(["a:1"], {}).hosts == ()
+
+    def test_a_tracked_exporter_is_held_until_untracked(self):
+        """While its position is kept, its id cannot pass to a new exporter."""
+        departures = DepartedNodes()
+        exporter = _RecordingExporter("a")
+        ref = weakref.ref(exporter)
+        departures.track([exporter])
+        del exporter
+        gc.collect()
+        assert ref() is not None
+        departures.track([])
+        gc.collect()
+        assert ref() is None
+
+    def test_with_no_exporters_departures_are_kept(self):
+        departures = DepartedNodes()
+        departures.track([])
+        departures.observe(["a:1"], {})
+        assert departures.observe(["a:1"], {}).hosts == ("a:1",)
+
+    def test_a_rejoined_node_is_no_longer_departed(self):
+        departures = DepartedNodes()
+        departures.observe(["a:1"], {})
+        assert departures.observe(["a:1"], {"a:1": "A"}).hosts == ()
+        # Leaving again is a new departure.
+        assert departures.observe(["a:1"], {}).hosts == ("a:1",)
+
+    def test_departures_past_the_cap_are_counted_not_kept(self):
+        hosts = [f"10.0.{i // 250}.{i % 250}:3000" for i in range(MAX_RETAINED_DEPARTED_NODES + 3)]
+        departures = DepartedNodes().observe(hosts, {})
+        assert len(departures.hosts) == MAX_RETAINED_DEPARTED_NODES
+        assert departures.dropped == 3
+
+
+class TestDepartureDelivery:
+    """The export timer hands each exporter the departures it is owed."""
+
+    def test_a_failed_export_receives_the_departure_again(self):
+        good, flaky = _RecordingExporter("good"), _RecordingExporter("flaky", raises=True)
+        cluster = _StubCluster([good, flaky])
+        cluster.hosts = ["a:1"]
+        timer = SyncMetricsExportTimer(cluster, 3600.0)
+        timer._export_once()
+        assert good.departed == ("a:1",) and flaky.departed == ("a:1",)
+        flaky.raises = False
+        timer._export_once()
+        assert good.departed == ()
+        assert flaky.departed == ("a:1",)
+        timer._export_once()
+        assert flaky.departed == ()
+
+    def test_departure_state_survives_a_timer_restart(self):
+        exporter = _RecordingExporter("a")
+        cluster = _StubCluster([exporter])
+        cluster.hosts = ["a:1"]
+        SyncMetricsExportTimer(cluster, 3600.0)._export_once()
+        SyncMetricsExportTimer(cluster, 3600.0)._export_once()
+        assert exporter.departed == ()
 
 
 class TestMetricsWriter:
@@ -501,6 +598,27 @@ class TestAsyncExportTimer:
         assert len(received) == 1 and len(failures) == 1
         assert "raised" in caplog.text
 
+    async def test_the_snapshot_is_built_off_the_loop(self):
+        cluster = _ThreadRecordingCluster([_AsyncRecordingExporter()])
+        timer = AsyncMetricsExportTimer(cluster, 3600.0)
+        try:
+            await timer._export_once()
+        finally:
+            await timer.stop()
+        assert cluster.thread is not threading.current_thread()
+        assert cluster.thread.name.startswith("aerospike-metrics-snapshot")
+
+    async def test_stop_waits_for_a_build_still_on_the_worker(self):
+        cluster = _BlockingSnapshotCluster([_AsyncRecordingExporter()])
+        timer = AsyncMetricsExportTimer(cluster, 0.0)
+        timer.start()
+        assert await asyncio.to_thread(cluster.started.wait, 5)
+        stopping = asyncio.ensure_future(timer.stop())
+        await asyncio.sleep(0.05)
+        assert not stopping.done()
+        cluster.release.set()
+        await asyncio.wait_for(stopping, 5)
+
 
 class _AsyncRecordingExporter:
     def __init__(self):
@@ -513,6 +631,25 @@ class _AsyncRecordingExporter:
 class _FailingSnapshotCluster(_StubCluster):
     def metrics_snapshot(self):
         raise RuntimeError("client core is gone")
+
+
+class _ThreadRecordingCluster(_StubCluster):
+    def metrics_snapshot(self):
+        self.thread = threading.current_thread()
+        return super().metrics_snapshot()
+
+
+class _BlockingSnapshotCluster(_StubCluster):
+    """A snapshot build that holds the worker until released."""
+
+    def __init__(self, exporters):
+        super().__init__(exporters)
+        self.started, self.release = threading.Event(), threading.Event()
+
+    def metrics_snapshot(self):
+        self.started.set()
+        self.release.wait(5)
+        return super().metrics_snapshot()
 
 
 class TestFinalExport:
@@ -577,8 +714,11 @@ class TestFinalExport:
                 await asyncio.sleep(0)
             assert exporter.calls == 0
             pending.set_result(None)
-            for _ in range(5):
-                await asyncio.sleep(0)
+            # The snapshot is built on a worker thread, so allow it real time.
+            for _ in range(500):
+                if exporter.calls:
+                    break
+                await asyncio.sleep(0.01)
             assert exporter.calls > 0
         finally:
             await timer.stop()
