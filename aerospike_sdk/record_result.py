@@ -120,6 +120,27 @@ class RecordResult:
         _set_server_message(self, server_message)
         _set_exp_trace(self, exp_trace)
 
+    def __getattr__(self, name: str) -> Any:
+        # Reached only for a slot that was never stored. A row built by
+        # _ok_result stores just the fields a successful row's hot path
+        # reads; the rest read as their defaults from here, so the common
+        # row skips six stores and pays only on a rare read.
+        if name == "key":
+            # Building a Key costs more than the rest of the row, and many
+            # consumers never look at it. Stored on first read, so the row
+            # keeps handing back the same object.
+            key = self.record.key
+            if key is None:
+                key = Key("", "", 0)
+            _set_key(self, key)
+            return key
+        try:
+            return _UNSTORED_DEFAULTS[name]
+        except KeyError:
+            raise AttributeError(
+                f"{type(self).__name__!r} object has no attribute {name!r}"
+            ) from None
+
     def __repr__(self) -> str:
         # Compact, log-friendly summary. The default dataclass repr embeds the
         # full Record (and its digest) alongside the Key's digest, doubling a
@@ -165,7 +186,10 @@ class RecordResult:
             if row is not None and row.is_ok and row.record:
                 bins = row.record.bins
         """
-        return self.exception is None and self.result_code == ResultCode.OK
+        # Identity first: a successful stream row carries the one shared OK
+        # object, and comparing two result codes costs far more than this.
+        code = self.result_code
+        return self.exception is None and (code is _OK or code == _OK)
 
     def or_raise(self) -> RecordResult:
         """Return ``self`` if successful, else raise from :attr:`exception` or result code.
@@ -393,6 +417,33 @@ _set_udf_result = RecordResult.udf_result.__set__
 _set_sub_code = RecordResult.sub_code.__set__
 _set_server_message = RecordResult.server_message.__set__
 _set_exp_trace = RecordResult.exp_trace.__set__
+
+_UNSTORED_DEFAULTS: dict[str, Any] = {
+    "in_doubt": False,
+    "index": -1,
+    "udf_result": None,
+    "sub_code": None,
+    "server_message": None,
+    "exp_trace": None,
+}
+_new_result = object.__new__
+_OK = ResultCode.OK
+
+
+def _ok_result(record: Record) -> RecordResult:
+    """Build the OK row a query yields for ``record`` (internal plumbing).
+
+    Equal to ``RecordResult(record.key, record, ResultCode.OK)``, with an
+    empty key standing in when the record has none. ``exception`` is stored
+    because :attr:`RecordResult.is_ok` reads it on every row; the key is
+    built on first read, and the remaining fields are left unstored and
+    read as their defaults.
+    """
+    result = _new_result(RecordResult)
+    _set_record(result, record)
+    _set_result_code(result, _OK)
+    _set_exception(result, None)
+    return result
 
 
 def batch_failure_records_to_results(

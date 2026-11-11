@@ -39,7 +39,7 @@ from aerospike_sdk.exceptions import (
     _convert_pnc_exception,
     _result_code_to_exception,
 )
-from aerospike_sdk.record_result import RecordResult
+from aerospike_sdk.record_result import RecordResult, _ok_result
 
 from aerospike_sdk.loggers import SdkLoggers
 
@@ -161,14 +161,7 @@ class RecordStream:
         def _gen() -> Iterator[RecordResult]:
             try:
                 for record in recordset:
-                    key = (
-                        record.key
-                        if hasattr(record, "key") and record.key is not None
-                        else Key("", "", 0)
-                    )
-                    yield RecordResult(
-                        key=key, record=record, result_code=ResultCode.OK,
-                    )
+                    yield _ok_result(record)
             except Exception as e:
                 raise _convert_pnc_exception(e) from e
             finally:
@@ -441,11 +434,8 @@ def _chunked_iter(
         for record in recordset:
             if 0 < limit <= counter[0]:
                 return
-            key = record.key if hasattr(record, "key") and record.key is not None else Key("", "", 0)
             counter[0] += 1
-            yield RecordResult(
-                key=key, record=record, result_code=ResultCode.OK,
-            )
+            yield _ok_result(record)
     except Exception as e:
         raise _convert_pnc_exception(e) from e
 
