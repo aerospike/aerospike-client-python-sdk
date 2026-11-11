@@ -127,3 +127,37 @@ class TestRouting:
         assert not routing.usable("1A0")
         routing.unowned = None
         assert routing.usable("1A0")
+
+
+class TestListenerProbe:
+    def test_serving_starts_at_the_first_of_three_rounds_with_every_address(self):
+        probe = driver.ListenerProbe()
+        probe.round(10, [("10.0.0.1", True), ("10.0.0.2", False)])
+        probe.round(20, [("10.0.0.1", True), ("10.0.0.2", True)])
+        probe.round(30, [("10.0.0.1", True), ("10.0.0.2", True)])
+        assert probe.serving_at is None
+        probe.round(40, [("10.0.0.1", True), ("10.0.0.2", True)])
+        assert probe.serving_at == 20 and probe.last_closed_at == 10
+        assert probe.addresses() == [
+            {"address": "10.0.0.1", "firstConnectedAt": 10},
+            {"address": "10.0.0.2", "firstConnectedAt": 20},
+        ]
+
+    def test_a_refused_round_restarts_the_count(self):
+        probe = driver.ListenerProbe()
+        probe.round(10, [("10.0.0.1", True)])
+        probe.round(20, [("10.0.0.1", True)])
+        probe.round(30, [("10.0.0.1", False)])
+        probe.round(40, [("10.0.0.1", True)])
+        probe.round(50, [("10.0.0.1", True)])
+        assert probe.serving_at is None and probe.last_closed_at == 30
+        probe.round(60, [("10.0.0.1", True)])
+        assert probe.serving_at == 40
+
+    def test_a_round_that_resolved_nothing_does_not_serve(self):
+        probe = driver.ListenerProbe()
+        for t in (10, 20, 30):
+            probe.round(t, [])
+        assert probe.serving_at is None and probe.last_closed_at == 30
+        probe.round(40, [("10.0.0.1", False)])
+        assert probe.addresses() == [{"address": "10.0.0.1", "firstConnectedAt": None}]

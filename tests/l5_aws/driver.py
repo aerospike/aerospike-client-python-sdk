@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The SDK's L5 driver for the ``l5-aws`` harness in aerospike-client-conformance.
 
-Implements ``l5-aws/DRIVER.md`` contract version 1: builds one async client
+Implements ``l5-aws/DRIVER.md`` contract version 3: builds one async client
 for the shape the harness asks for, runs a fixed read/write load, polls the
 client's routing, and reports what the client sees as JSON lines on stdout.
 The driver measures and reports; the harness makes every pass/fail decision.
@@ -45,7 +45,7 @@ from aerospike_sdk import (
 )
 from aerospike_sdk.policy import Settings, SystemSettings
 
-CONTRACT = 1
+CONTRACT = 3
 CLIENT_NAME = "python-sdk"
 PARTITIONS = 4096
 
@@ -55,6 +55,7 @@ REACHABILITY_EVERY_MS = 500
 REACHABILITY_TIMEOUT_MS = 1000
 WATCH_PROBE_MS = 10
 WATCH_CONNECT_TIMEOUT_S = 0.05
+WATCH_SERVING_ROUNDS = 3
 WATCH_GIVE_UP_MS = 60_000
 QUIT_GRACE_S = 30
 SERVE_CONCURRENCY = 16
@@ -273,6 +274,8 @@ class Load:
         self.max_latency_ms = 0
         self.reset_at = 0
         self.first_success = asyncio.Event()
+        # Set once ``ready`` is written: a failure before it has no line to follow.
+        self.report_failures = False
         self.stopping = False
         self.tasks: List[asyncio.Task] = []
 
@@ -305,6 +308,7 @@ class Load:
             key = self.dataset.id(f"load-{k}")
             started = now_ms()
             while True:
+                attempt_started = now_ms()
                 try:
                     if i % 2 == 0:
                         await self.session.put(key, {"v": i})
@@ -318,6 +322,9 @@ class Load:
                 except Exception as e:  # any error the client raises is a failed attempt
                     self.failed += 1
                     self.last_error = f"{type(e).__name__}: {e}"
+                    if self.report_failures:
+                        emit({"type": "failure", "t": now_ms(), "startedAt": attempt_started,
+                              "message": self.last_error})
                     if self.stopping:
                         return
                     await asyncio.sleep(self.retry_sleep_s)
@@ -326,6 +333,44 @@ class Load:
                 self.max_latency_ms = max(self.max_latency_ms, now_ms() - started)
             self.first_success.set()
             i += 1
+
+
+# -- Watch probe --------------------------------------------------------------
+
+class ListenerProbe:
+    """Rounds of connects to every address a listener's name resolves to.
+
+    The listener serves from the first of ``WATCH_SERVING_ROUNDS`` consecutive
+    rounds in which every address connected: the client may connect to any of
+    them, so the measurement starts only when none refuses.
+    """
+
+    def __init__(self) -> None:
+        self.serving_at: Optional[int] = None
+        self.last_closed_at: Optional[int] = None
+        self.first_connected_at: Dict[str, Optional[int]] = {}
+        self._streak_started: Optional[int] = None
+        self._streak = 0
+
+    def round(self, t: int, results: Sequence[Tuple[str, bool]]) -> None:
+        """Record one round that started at *t*: ``(address, connected)`` per address."""
+        for address, connected in results:
+            first = self.first_connected_at.setdefault(address, None)
+            if connected and first is None:
+                self.first_connected_at[address] = t
+        if results and all(connected for _, connected in results):
+            if self._streak == 0:
+                self._streak_started = t
+            self._streak += 1
+            if self._streak >= WATCH_SERVING_ROUNDS and self.serving_at is None:
+                self.serving_at = self._streak_started
+        else:
+            self._streak = 0
+            self.last_closed_at = t
+
+    def addresses(self) -> List[Dict[str, Any]]:
+        return [{"address": address, "firstConnectedAt": t}
+                for address, t in self.first_connected_at.items()]
 
 
 # -- Driver -------------------------------------------------------------------
@@ -424,6 +469,7 @@ class Driver:
             "epochMs": int(time.time() * 1000), "client": CLIENT_NAME,
             "clientVersion": aerospike_sdk.__version__, "shape": self.options.shape,
         })
+        self.load.report_failures = True
         await self._commands()
         if self.watch_task is not None and not self.watch_task.done():
             # A watch that quit interrupts still owes its reply; it gives up
@@ -536,21 +582,17 @@ class Driver:
     async def _watch(self, address: str, node: str) -> None:
         try:
             host, port = split_host_port(address)
-            # One connection per probe, to the address the name resolves to
-            # first, as the reference driver's probe does: a name with several
-            # addresses is not polled on all of them at once.
-            loop = asyncio.get_running_loop()
-            resolved = await loop.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-            probe_host = resolved[0][4][0] if resolved else host
-            serving_at: Optional[int] = None
-            last_closed_at: Optional[int] = None
-            while serving_at is None:
-                attempt = now_ms()
-                if await self._tcp_open(probe_host, port):
-                    serving_at = attempt
-                else:
-                    last_closed_at = attempt
-                    await asyncio.sleep(WATCH_PROBE_MS / 1000)
+            probe = ListenerProbe()
+            while probe.serving_at is None:
+                round_started = time.monotonic()
+                t = now_ms()
+                addresses = await self._resolve(host, port)
+                connected = await asyncio.gather(*(self._tcp_open(a, port) for a in addresses))
+                probe.round(t, list(zip(addresses, connected)))
+                # Rounds never overlap: a slow round delays the next tick.
+                await asyncio.sleep(
+                    max(0.0, WATCH_PROBE_MS / 1000 - (time.monotonic() - round_started)))
+            serving_at = probe.serving_at
             usable_at: Optional[int] = None
             while usable_at is None and now_ms() - serving_at < WATCH_GIVE_UP_MS:
                 if self.routing.usable(node):
@@ -559,7 +601,8 @@ class Driver:
                 await asyncio.sleep(WATCH_PROBE_MS / 1000)
             emit({
                 "type": "watch", "t": now_ms(), "address": address, "node": node,
-                "servingAt": serving_at, "lastClosedAt": last_closed_at, "usableAt": usable_at,
+                "servingAt": serving_at, "lastClosedAt": probe.last_closed_at,
+                "addresses": probe.addresses(), "usableAt": usable_at,
                 "usableMs": None if usable_at is None else usable_at - serving_at,
                 "ownershipChecked": self.routing.unowned is not None,
             })
@@ -567,14 +610,24 @@ class Driver:
             self._error(f"watch: {e}")
 
     @staticmethod
+    async def _resolve(host: str, port: int) -> List[str]:
+        """Every address *host* resolves to, in resolution order; none on a failed lookup."""
+        try:
+            infos = await asyncio.get_running_loop().getaddrinfo(
+                host, port, type=socket.SOCK_STREAM)
+        except OSError:
+            return []
+        return list(dict.fromkeys(info[4][0] for info in infos))
+
+    @staticmethod
     async def _tcp_open(host: str, port: int) -> bool:
-        def probe() -> bool:
-            try:
-                with socket.create_connection((host, port), timeout=WATCH_CONNECT_TIMEOUT_S):
-                    return True
-            except OSError:
-                return False
-        return await asyncio.get_running_loop().run_in_executor(None, probe)
+        try:
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection(host, port), WATCH_CONNECT_TIMEOUT_S)
+        except (OSError, asyncio.TimeoutError):
+            return False
+        writer.close()
+        return True
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
