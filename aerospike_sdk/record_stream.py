@@ -29,7 +29,7 @@ from aerospike_sdk.exceptions import (
     _convert_pnc_exception,
     _result_code_to_exception,
 )
-from aerospike_sdk.record_result import RecordResult
+from aerospike_sdk.record_result import RecordResult, _ok_result
 
 if TYPE_CHECKING:  # Not unused — needed for forward-reference type annotations and Sphinx autodoc.
     from aerospike_sdk.error_strategy import ErrorHandler
@@ -202,12 +202,11 @@ class RecordStream:
         async def _iter() -> AsyncIterator[RecordResult]:
             try:
                 async for record in recordset:
-                    key = record.key if hasattr(record, "key") and record.key is not None else Key("", "", 0)
-                    yield RecordResult(
-                        key=key,
-                        record=record,
-                        result_code=ResultCode.OK,
-                    )
+                    # Read once: each access builds a new Key.
+                    key = record.key
+                    if key is None:
+                        key = Key("", "", 0)
+                    yield _ok_result(key, record)
             except Exception as e:
                 raise _convert_pnc_exception(e) from e
             finally:
@@ -253,15 +252,12 @@ class RecordStream:
                 async for record in recordset:
                     if 0 < limit <= counter[0]:
                         break
-                    key = (
-                        record.key
-                        if hasattr(record, "key") and record.key is not None
-                        else Key("", "", 0)
-                    )
+                    # Read once: each access builds a new Key.
+                    key = record.key
+                    if key is None:
+                        key = Key("", "", 0)
                     counter[0] += 1
-                    yield RecordResult(
-                        key=key, record=record, result_code=ResultCode.OK,
-                    )
+                    yield _ok_result(key, record)
             except Exception as e:
                 raise _convert_pnc_exception(e) from e
 
@@ -315,13 +311,21 @@ class RecordStream:
         """Return ``self`` for ``async for`` iteration."""
         return self
 
-    async def __anext__(self) -> RecordResult:
+    def __anext__(self) -> Awaitable[RecordResult]:
         """Yield the next :class:`~aerospike_sdk.record_result.RecordResult`.
 
         Raises:
             StopAsyncIteration: When the stream is exhausted or :meth:`close` was
                 called before more rows were read.
         """
+        # Not a coroutine: handing back the source's own awaitable spares a
+        # coroutine object and a frame for every row of a lazily fed stream.
+        if self._closed or self._single_result is not None:
+            return self._anext_settled()
+        return self._source.__anext__()
+
+    async def _anext_settled(self) -> RecordResult:
+        """Resolve a step that needs no source: closed, or a single stashed row."""
         if self._closed:
             raise StopAsyncIteration
         # Single-result fast path: _from_single skips iterator allocation
@@ -332,7 +336,7 @@ class RecordStream:
             self._single_result = None
             self._closed = True
             return r
-        return await self._source.__anext__()
+        raise StopAsyncIteration
 
     # -- chunked iteration ---------------------------------------------------
 

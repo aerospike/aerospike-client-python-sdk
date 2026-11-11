@@ -26,6 +26,7 @@ from aerospike_sdk.exceptions import AerospikeError, GenerationError, ResultCode
 from aerospike_sdk import HllConfig
 from aerospike_sdk.record_result import (
     RecordResult,
+    _ok_result,
     batch_failure_records_to_results,
     batch_records_to_results,
 )
@@ -522,3 +523,36 @@ class TestRepr:
         text = repr(rr)
         assert "index" not in text
         assert text.startswith("RecordResult(result_code=")
+
+
+class TestOkResult:
+    """The lean constructor query streams use for successful rows."""
+
+    def test_equals_the_full_constructor(self):
+        rec = _record()
+        lean = _ok_result(_key(), rec)
+        full = RecordResult(key=_key(), record=rec, result_code=ResultCode.OK)
+        assert lean == full
+        for field in dataclasses.fields(RecordResult):
+            assert getattr(lean, field.name) == getattr(full, field.name)
+        assert repr(lean) == repr(full)
+
+    def test_unstored_fields_read_as_defaults(self):
+        row = _ok_result(_key(), _record())
+        assert row.is_ok
+        assert row.in_doubt is False
+        assert row.index == -1
+        assert row.exception is None
+        assert row.udf_result is None
+        assert row.sub_code is None
+        assert row.server_message is None
+        assert row.exp_trace is None
+
+    def test_replace_keeps_working(self):
+        row = dataclasses.replace(_ok_result(_key(), _record()), index=3)
+        assert row.index == 3
+        assert row.result_code == ResultCode.OK
+
+    def test_unknown_attribute_still_raises(self):
+        with pytest.raises(AttributeError):
+            _ok_result(_key(), _record()).no_such_field

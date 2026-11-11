@@ -250,13 +250,42 @@ class TestFromRecordset:
         stream = RecordStream._from_pnc_recordset(_FakeRecordset([]))
         assert await stream.collect() == []
 
-    async def test_fallback_key_when_no_key_attribute(self):
-        rec = SimpleNamespace(bins={"x": 1})
+    async def test_fallback_key_when_record_has_no_key(self):
+        rec = SimpleNamespace(bins={"x": 1}, key=None)
         stream = RecordStream._from_pnc_recordset(_FakeRecordset([rec]))
         results = await stream.collect()
         assert len(results) == 1
         assert results[0].record is rec
         assert results[0].key == Key("", "", 0)
+
+    async def test_key_is_read_once_per_record(self):
+        reads = 0
+
+        class _CountingRecord:
+            bins = {"a": 1}
+
+            @property
+            def key(self):
+                nonlocal reads
+                reads += 1
+                return _key(1)
+
+        stream = RecordStream._from_pnc_recordset(_FakeRecordset([_CountingRecord()]))
+        results = await stream.collect()
+        assert results[0].key == _key(1)
+        assert reads == 1
+
+    async def test_rows_equal_fully_constructed_results(self):
+        rec = SimpleNamespace(bins={"a": 1}, key=_key(1))
+        stream = RecordStream._from_pnc_recordset(_FakeRecordset([rec]))
+        row = (await stream.collect())[0]
+        assert row == RecordResult(key=_key(1), record=rec, result_code=ResultCode.OK)
+
+    async def test_anext_default_applies_once_closed(self):
+        rec = SimpleNamespace(bins={"a": 1}, key=_key(1))
+        stream = RecordStream._from_pnc_recordset(_FakeRecordset([rec]))
+        stream.close()
+        assert await anext(stream, None) is None
 
 
 class _FakeChunkRecordset(_FakeRecordset):
