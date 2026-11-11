@@ -9,11 +9,7 @@ description = "Aerospike Python SDK - a modern, developer-friendly interface for
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-<<<<<<< HEAD
-    "aerospike-native==1.0.1.dev129",
-=======
-    "aerospike-native==1.0.1.dev132",
->>>>>>> vector
+    "aerospike-native==1.0.1.dev133",
     "typing_extensions>=4.0.0",
     "pyyaml>=6.0",
 ]
