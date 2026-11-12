@@ -1273,8 +1273,8 @@ class _QueryBuilderBase:
     def then_order_by(self, bin_name: str, data_type: BinDataType, order: Order) -> Self:
         """Add a tie-breaking key, compared only when the earlier key ties.
 
-        A query takes at most two keys, on different bins. Called with no
-        earlier :meth:`order_by`, this key becomes the first.
+        A query takes at most two keys, on different bins, and the first comes
+        from :meth:`order_by`, so this must follow it.
 
         Example::
 
@@ -1296,18 +1296,19 @@ class _QueryBuilderBase:
             This builder for chaining.
 
         Raises:
-            AerospikeError: ``ResultCode.PARAMETER_ERROR`` on a key query, or
-                at execute for a third key or a repeated bin.
+            AerospikeError: ``ResultCode.PARAMETER_ERROR`` on a key query or
+                with no earlier :meth:`order_by`, or at execute for a third
+                key or a repeated bin.
 
         See Also:
             :meth:`order_by`: First key, replacing any set before.
         """
         self._reject_top_k_on_key_query()
-        key = (bin_name, data_type, order)
         if self._order_keys is None:
-            self._order_keys = [key]
-        else:
-            self._order_keys.append(key)
+            self._raise_top_k_conflict(
+                "then_order_by(...) needs an earlier order_by(...), which sets the first key"
+            )
+        self._order_keys.append((bin_name, data_type, order))
         return self
 
     def top_k(self, k: int) -> Self:

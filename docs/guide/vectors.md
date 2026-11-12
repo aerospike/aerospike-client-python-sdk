@@ -152,7 +152,8 @@ The rules for order keys:
   either direction. That includes a record whose projected distance is
   unknown.
 - `then_order_by` adds a tie-breaker, compared only when the first key ties.
-  A query takes at most two keys, on different bins.
+  A query takes at most two keys, on different bins. `then_order_by` must
+  follow `order_by`; called first, it raises at once.
 - Calling `order_by` again replaces every key set before.
 
 `k` runs from 1 to 1000. Because `k` is the whole result's size, a Top-K

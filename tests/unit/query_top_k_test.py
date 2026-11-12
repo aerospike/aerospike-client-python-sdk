@@ -92,11 +92,6 @@ class TestOrderKeys:
         ]
         assert statement.top_k == 5
 
-    def test_then_order_by_alone_becomes_the_first_key(self):
-        qb = _builder().then_order_by("price", BinDataType.DOUBLE, Order.ASC).top_k(3)
-        statement = qb._build_dataset_read_statement()
-        assert _keys(statement) == [("price", BinDataType.DOUBLE, Order.ASC)]
-
     def test_unranked_query_sets_nothing(self):
         statement = _builder()._build_dataset_read_statement()
         assert statement.order_by == []
@@ -116,6 +111,14 @@ class TestBuilderChecks:
         with pytest.raises(AerospikeError) as exc_info:
             _builder().top_k(k)
         _assert_parameter_error(exc_info, f"top_k(k) must be in [1, 1000]; got {k}")
+
+    @pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+    def test_then_order_by_before_order_by_is_refused_at_chain_time(self, sync):
+        qb = _builder(sync=sync).top_k(3)
+        with pytest.raises(AerospikeError) as exc_info:
+            qb.then_order_by("price", BinDataType.DOUBLE, Order.ASC)
+        _assert_parameter_error(exc_info, "needs an earlier order_by(...)")
+        assert qb._order_keys is None
 
     @pytest.mark.parametrize("k", [1, 1000])
     def test_k_at_the_bounds_is_accepted(self, k):
