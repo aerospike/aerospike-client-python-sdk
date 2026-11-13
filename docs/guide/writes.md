@@ -140,6 +140,11 @@ stream = await (
 result = await stream.first_or_raise()
 ```
 
+An insert resolves the behavior's non-retryable write scope and, under
+`Behavior.DEFAULT`, is not retried: a retry after an attempt that landed
+would report the record as already existing. See
+{ref}`Retryable and non-retryable writes <retryable-writes>`.
+
 ## Replace (Overwrite All Bins)
 
 ```python
@@ -229,6 +234,11 @@ await (
     .execute()
 )
 ```
+
+A write with a generation check resolves the behavior's non-retryable write
+scope and, under `Behavior.DEFAULT`, is not retried: a retry after an
+attempt that landed would fail the check. See
+{ref}`Retryable and non-retryable writes <retryable-writes>`.
 
 ## TTL / Expiration
 

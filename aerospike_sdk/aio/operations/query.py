@@ -1365,6 +1365,21 @@ class RowWriteBuilder(_RowWriteBuilderBase["QueryBuilder"]):
         return self._qb.stream(on_error)
 
 
+class _SingleKeyInsertSegment(_SingleKeyWriteSegment):
+    """Single-key insert fast path: non-retryable from construction.
+
+    A retry after an attempt that reached the server would report the record
+    as existing, so an insert never resolves the retryable write scope. The
+    session hands this segment the non-retryable policy pair in the write
+    slots; the class default below keeps promotion and a transaction-bound
+    resolve on the same scope without a per-instance store.
+    """
+
+    __slots__ = ()
+
+    _retryable_fast = False
+
+
 class DataSetWriteBuilder(_DataSetWriteBuilderBase["QueryBuilder"]):
     """A write verb scoped to a dataset; :meth:`bins` opens the row builder."""
 

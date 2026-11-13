@@ -126,6 +126,10 @@ class TransactionalSessionBase:
         self._require_open()
         return super()._fast_write_segment(op_type, key)  # type: ignore[misc]
 
+    def _fast_insert_segment(self, key: Key) -> Any:
+        self._require_open()
+        return super()._fast_insert_segment(key)  # type: ignore[misc]
+
     def _dataset_write_builder(self, op_type: str, dataset: DataSet) -> Any:
         self._require_open()
         return super()._dataset_write_builder(op_type, dataset)  # type: ignore[misc]
