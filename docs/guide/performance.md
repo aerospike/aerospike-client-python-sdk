@@ -206,16 +206,18 @@ defaults to `os.cpu_count()` (or 4 if indeterminate).
 
 **Event loop under free-threading.** The pool uses uvloop by default under
 free-threading — its per-op savings compound with the multi-loop scaling, worth
-~**+8%** FT pool throughput over the stdlib selector fallback (measured, 4×64
-fast-path, latency-neutral). This
-is safe because PNC routes its cross-thread completion wakeups through a
-self-pipe watched by an `add_reader` callback instead of `call_soon_threadsafe`,
-sidestepping a libuv free-threading race (MagicStack/uvloop #720) that otherwise
-stalls a multi-loop pool on uvloop releases lacking the upstream fix. The
-transport engages automatically; set `AEROSPIKE_PIPE_WAKE=0` to disable it (the
-pool then falls back to the stdlib selector loop under free-threading to stay
-safe) or `=1` to force it on. Override the loop choice directly with
-`AsyncPool(..., use_uvloop=True|False)`.
+~**+8%** FT pool throughput over the stdlib selector loop (measured, 4×64
+fast-path, latency-neutral). PNC requires uvloop 0.23 or later wherever uvloop
+exists (everywhere but Windows), the first release that fixes the
+free-threading race on the loop's ready queue (MagicStack/uvloop #720) that
+stalled multi-loop pools on 0.22.x, so no workaround is involved on a normal
+install. PNC also delivers its cross-thread completion wakeups through a
+self-pipe watched by an `add_reader` callback rather than
+`call_soon_threadsafe`; `AEROSPIKE_PIPE_WAKE=0` turns that transport off and
+`=1` forces it on. The pool falls back to the stdlib selector loop under
+free-threading only when both protections are missing: an older uvloop
+installed around the dependency floor, with the transport turned off. Override
+the loop choice directly with `AsyncPool(..., use_uvloop=True|False)`.
 
 **AsyncPool on regular (GIL-on) Python is now roughly on par with single-client async** after the uvloop-in-pool change — measured ~117K (pool 4×64) vs ~110K (single-loop) on FT-Python forced to GIL-on. The GIL still serializes all Python execution across pool threads, so the multi-loop architecture can't deliver the full FT scaling, but uvloop's per-op savings inside the pool now roughly cancel the orchestration overhead.
 
