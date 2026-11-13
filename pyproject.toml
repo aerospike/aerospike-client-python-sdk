@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +7,10 @@ name = "aerospike-sdk"
 dynamic = ["version"]
 description = "Aerospike Python SDK - a modern, developer-friendly interface for Aerospike"
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Aerospike, Inc.", email = "info@aerospike.com" }]
+keywords = ["aerospike", "database", "nosql", "client", "async"]
 requires-python = ">=3.11"
 dependencies = [
     "aerospike-native==1.0.1.dev131",
@@ -16,15 +20,24 @@ dependencies = [
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Framework :: AsyncIO",
+    "Topic :: Database",
+    "Topic :: Software Development :: Libraries :: Python Modules",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
     "Programming Language :: Python :: 3.15",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Free Threading :: 3 - Stable",
 ]
 
 [project.urls]
+Homepage = "https://aerospike.com"
 Documentation = "https://aerospike.com/docs/develop/client/sdk/"
 "API Reference" = "https://aerospike-python-sdk.readthedocs.io/"
 Repository = "https://github.com/aerospike/aerospike-client-python-sdk"
