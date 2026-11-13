@@ -195,6 +195,55 @@ class TestTopK:
         assert similarities[0] == pytest.approx(1.0)
         assert len(similarities) == 3
 
+    async def test_ranks_by_a_key_named_in_the_bin_list(self, session):
+        stream = await (
+            session.query(_DS)
+            .bins("category", "price")
+            .order_by("price", BinDataType.DOUBLE, Order.ASC)
+            .top_k(3)
+            .execute()
+        )
+        rows = [row.record_or_raise().bins async for row in stream]
+        assert [bins["price"] for bins in rows] == [10.0, 20.0, 30.0]
+        assert all(set(bins) == {"category", "price"} for bins in rows)
+
+    @pytest.mark.parametrize(
+        "project, missing",
+        [
+            pytest.param(
+                lambda q: q.bins("category")
+                .order_by("price", BinDataType.DOUBLE, Order.ASC),
+                "price", id="first-key-not-in-bin-list",
+            ),
+            pytest.param(
+                lambda q: q.bins("price")
+                .order_by("price", BinDataType.DOUBLE, Order.ASC)
+                .then_order_by("tier", BinDataType.INTEGER, Order.ASC),
+                "tier", id="second-key-not-in-bin-list",
+            ),
+            pytest.param(
+                lambda q: q.bin("category").get()
+                .order_by("price", BinDataType.DOUBLE, Order.ASC),
+                "price", id="key-not-produced-by-the-operations",
+            ),
+            pytest.param(
+                lambda q: q
+                .bin("similarity").select_from(_similarity(), ignore_eval_failure=True)
+                .bin("similarity").select_from(_similarity(), ignore_eval_failure=True)
+                .order_by("similarity", BinDataType.DOUBLE, Order.DESC),
+                "similarity", id="key-produced-by-two-operations",
+                marks=requires_vector,
+            ),
+        ],
+    )
+    async def test_key_the_projection_does_not_return_is_refused(
+        self, session, project, missing,
+    ):
+        with pytest.raises(AerospikeError) as exc_info:
+            await project(session.query(_DS)).top_k(3).execute()
+        assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+        assert f"'{missing}'" in str(exc_info.value)
+
     async def test_two_keys_on_one_bin_are_refused(self, session):
         with pytest.raises(AerospikeError) as exc_info:
             await (

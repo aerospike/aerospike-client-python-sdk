@@ -17,7 +17,8 @@
 
 import pytest
 
-from aerospike_sdk import BinDataType, DataSet, Order
+from aerospike_sdk import BinDataType, DataSet, Order, ResultCode
+from aerospike_sdk.exceptions import AerospikeError
 from tests.integration.namespace import general_namespace
 from tests.pnc_compat import requires_query_selection, requires_query_top_k
 
@@ -52,3 +53,17 @@ def test_ranked_query(session, where, expected):
         builder = builder.where(where)
     stream = builder.order_by("price", BinDataType.DOUBLE, Order.DESC).top_k(3).execute()
     assert [row.record_or_raise().bins["price"] for row in stream] == expected
+
+
+@requires_query_top_k
+def test_key_the_projection_does_not_return_is_refused(session):
+    with pytest.raises(AerospikeError) as exc_info:
+        (
+            session.query(_DS)
+            .bins("in_stock")
+            .order_by("price", BinDataType.DOUBLE, Order.DESC)
+            .top_k(3)
+            .execute()
+        )
+    assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+    assert "'price'" in str(exc_info.value)
