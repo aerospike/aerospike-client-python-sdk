@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """The SDK's L5 driver for the ``l5-aws`` harness in aerospike-client-conformance.
 
-Implements ``l5-aws/DRIVER.md`` contract version 3: builds one async client
+Implements ``l5-aws/DRIVER.md`` contract version 5: builds one async client
 for the shape the harness asks for, runs a fixed read/write load, polls the
 client's routing, and reports what the client sees as JSON lines on stdout.
 The driver measures and reports; the harness makes every pass/fail decision.
 
-Commands arrive one per line on stdin (``serve STEP``, ``watch HOST:PORT
-NODE``, ``reset``, ``quit``); end of input is ``quit``. Everything that is
-not a JSON object goes to stderr.
+Commands arrive one per line on stdin (``serve STEP``, ``large STEP BYTES
+KEYS``, ``watch HOST:PORT NODE``, ``reset``, ``quit``); end of input is
+``quit``. Everything that is not a JSON object goes to stderr.
 
 Check it locally against one server, with its node name from
 ``asinfo -v node``::
@@ -45,7 +45,7 @@ from aerospike_sdk import (
 )
 from aerospike_sdk.policy import Settings, SystemSettings
 
-CONTRACT = 3
+CONTRACT = 5
 CLIENT_NAME = "python-sdk"
 PARTITIONS = 4096
 
@@ -82,7 +82,11 @@ def emit(obj: Dict[str, Any]) -> None:
 
 
 def parse_port_map(text: str) -> Dict[str, str]:
-    """``NODE=HOST:PORT,...`` to a node-name to ``host:port`` mapping."""
+    """``KEY=HOST:PORT,...`` to a key to ``host:port`` mapping.
+
+    A key is a node name or an advertised ``HOST:PORT``; the translator tells
+    them apart, so each is passed on as given.
+    """
     mapping: Dict[str, str] = {}
     for item in text.split(","):
         item = item.strip()
@@ -101,6 +105,29 @@ def split_host_port(text: str) -> Tuple[str, int]:
     if not sep:
         raise ValueError(f"expected host:port, got {text!r}")
     return host.strip("[]"), int(port)
+
+
+def parse_large(args: Sequence[str]) -> Tuple[str, int, int]:
+    """``STEP BYTES KEYS`` to ``(step, bytes, keys)``.
+
+    Every value must be able to start with its key's name, so ``BYTES`` is at
+    least the length of the longest name, ``STEP-<KEYS-1>``.
+    """
+    if len(args) != 3:
+        raise ValueError("large takes STEP BYTES KEYS")
+    step, size, count = args[0], int(args[1]), int(args[2])
+    if count < 1:
+        raise ValueError(f"large KEYS must be at least 1, got {count}")
+    longest = len(f"{step}-{count - 1}")
+    if size < longest:
+        raise ValueError(f"large BYTES must be at least {longest}, the longest key name, "
+                         f"got {size}")
+    return step, size, count
+
+
+def large_value(name: str, size: int) -> str:
+    """A string of exactly *size* characters that starts with *name*."""
+    return name + "x" * (size - len(name))
 
 
 KEY_HASH_BATCH = 512
@@ -528,6 +555,13 @@ class Driver:
                 return
             if command == "serve" and len(args) == 1:
                 await self._serve(args[0])
+            elif command == "large":
+                try:
+                    step, size, count = parse_large(args)
+                except ValueError as e:
+                    self._error(f"{e}: {line.decode('utf-8', 'replace').strip()}")
+                else:
+                    await self._large(step, size, count)
             elif command == "reset" and not args:
                 self.routing.reset()
                 self.load.reset()
@@ -577,6 +611,48 @@ class Driver:
             "type": "served", "t": now_ms(), "step": step, "partitions": PARTITIONS,
             "written": written, "read": read, "mismatched": mismatched, "failures": failures,
             "firstFailure": first_failure, "elapsedMs": now_ms() - started,
+        })
+
+    async def _large(self, step: str, size: int, count: int) -> None:
+        """One key at a time, so ``maxMs`` is a single put or get, never a queue."""
+        started = now_ms()
+        session = self.cluster.create_session(self.behavior())
+        written = read = mismatched = failures = max_ms = 0
+        first_failure: Optional[str] = None
+        for n in range(count):
+            name = f"{step}-{n}"
+            key = self.dataset.id(name)
+            value = large_value(name, size)
+            t = now_ms()
+            try:
+                await session.put(key, {"v": value})
+            except Exception as e:
+                failures += 1
+                first_failure = first_failure or f"{name} put: {type(e).__name__}: {e}"
+                continue
+            finally:
+                max_ms = max(max_ms, now_ms() - t)
+            written += 1
+            t = now_ms()
+            try:
+                record = await session.get(key)
+            except RecordNotFoundError:
+                mismatched += 1
+                continue
+            except Exception as e:
+                failures += 1
+                first_failure = first_failure or f"{name} get: {type(e).__name__}: {e}"
+                continue
+            finally:
+                max_ms = max(max_ms, now_ms() - t)
+            if record.bins.get("v") == value:
+                read += 1
+            else:
+                mismatched += 1
+        emit({
+            "type": "large", "t": now_ms(), "step": step, "bytes": size, "keys": count,
+            "written": written, "read": read, "mismatched": mismatched, "failures": failures,
+            "firstFailure": first_failure, "maxMs": max_ms, "elapsedMs": now_ms() - started,
         })
 
     async def _watch(self, address: str, node: str) -> None:

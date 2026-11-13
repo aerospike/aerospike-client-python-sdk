@@ -4,3 +4,14 @@
 # actual result differs from its declaration, so a row changing in either
 # direction forces a reviewed change here. Every non-pass declaration names
 # the owning ticket or decision.
+
+discovery/translate/collision.yaml:
+  static-map-two-hosts-one-target: &no-collision-hook
+    result: unsupported
+    reason: >-
+      The collision checks run inside the tend, on peers that connected, and
+      PNC has no hook that applies them to a peers reply without a cluster.
+  port-map-two-keys-one-value: *no-collision-hook
+  pass-through-same-advertised-endpoint: *no-collision-hook
+  shared-host-distinct-ports: *no-collision-hook
+  three-peers-one-endpoint: *no-collision-hook

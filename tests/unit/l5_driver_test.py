@@ -34,6 +34,11 @@ class TestFlags:
             "1A0": "db:30001", "2A0": "db:30002",
         }
 
+    def test_port_map_keeps_advertised_host_port_keys_as_given(self):
+        assert driver.parse_port_map("10.0.0.1:3000=db:30001,[2001:db8::1]:3000=db:30002") == {
+            "10.0.0.1:3000": "db:30001", "[2001:db8::1]:3000": "db:30002",
+        }
+
     def test_bad_port_map_entry_is_rejected(self):
         with pytest.raises(ValueError):
             driver.parse_port_map("1A0")
@@ -58,6 +63,26 @@ class TestServeKeys:
         ordinals = [int(str(key.value).split("-")[1]) for key in keys]
         assert len(set(ordinals)) == driver.PARTITIONS
         assert min(ordinals) == 0
+
+
+class TestLarge:
+    def test_args_parse_to_step_bytes_and_keys(self):
+        assert driver.parse_large(["mtu", "1048576", "8"]) == ("mtu", 1048576, 8)
+
+    @pytest.mark.parametrize("args", [
+        ["mtu", "1048576"],
+        ["mtu", "big", "8"],
+        ["mtu", "1048576", "0"],
+        ["mtu", "4", "8"],  # shorter than "mtu-7"
+    ])
+    def test_malformed_args_are_rejected(self, args):
+        with pytest.raises(ValueError):
+            driver.parse_large(args)
+
+    def test_value_is_exactly_the_size_and_starts_with_the_key_name(self):
+        value = driver.large_value("mtu-7", 1 << 20)
+        assert len(value) == 1 << 20 and value.startswith("mtu-7")
+        assert driver.large_value("mtu-7", 5) == "mtu-7"
 
 
 class TestOwnership:

@@ -35,7 +35,7 @@ jobs:
           repository: aerospike/aerospike-client-conformance
           # main at VERSION 1.1.0, the version conformance_test.py pins;
           # repin to the v1.1.0 tag once the fixture set is tagged.
-          ref: f66304f36d1cded608e4d6c199622266e2db1dc3
+          ref: 575501469e053042b6fe0ae656920160226bda84
           path: conformance
 
       - name: Setup Python

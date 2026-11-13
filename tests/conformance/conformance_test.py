@@ -66,7 +66,7 @@ from aerospike_sdk.policy.sdk_config_loader import ENV_VAR, load_at_connect
 RUNTIME = "python"
 FIXTURE_SET_VERSION = "1.1.0"
 FIXTURE_ROOTS = ("discovery", "tls")
-FIXTURE_KINDS = ("translate", "merge", "dns", "aws-tags", "tls")
+FIXTURE_KINDS = ("translate", "collision", "merge", "dns", "aws-tags", "tls")
 DECLARED = Path(__file__).with_name("python-declared.yaml")
 REPORT = Path(__file__).parents[2] / "build" / "conformance" / "conformance-report.json"
 
@@ -239,6 +239,10 @@ def test_row(row, report, request, tmp_path, monkeypatch, caplog):
         actual = Outcome(BLOCKED, row.blocked_by)
     elif row.kind == "translate":
         actual = translate_row(row, SdkConfig(tmp_path, monkeypatch, caplog))
+    elif row.kind == "collision":
+        # The collision checks run inside the tend, on peers that connected;
+        # PNC has no hook that applies them to a peers reply without a cluster.
+        actual = Outcome(UNSUPPORTED, "no hook runs the collision checks without a cluster")
     elif row.kind == "merge":
         actual = merge_row(row, SdkConfig(tmp_path, monkeypatch, caplog))
     elif row.kind == "tls":
