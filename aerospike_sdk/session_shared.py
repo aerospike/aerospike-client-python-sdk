@@ -205,8 +205,9 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
         self._cached_read_policy = to_read_policy(
             behavior.get_settings(OpKind.READ, OpShape.POINT, Mode.AP))
         # The write pair backs ``put`` and the builders' plain writes, which
-        # are idempotent; a segment that queues a non-idempotent operation
-        # switches to the non-retryable pair at verb time.
+        # are idempotent. The non-retryable pair backs an insert from the
+        # start, and a segment that queues a non-idempotent operation or
+        # sets a generation check switches to it at verb time.
         self._cached_write_policy = to_write_policy(
             behavior.get_settings(OpKind.WRITE_RETRYABLE, OpShape.POINT, Mode.AP))
         self._cached_read_policy_sc = to_read_policy(
@@ -309,6 +310,10 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
 
     def _fast_write_segment(self, op_type: str, key: Key) -> _WSB:
         """Single-key write shortcut; overridden per leaf. Not called on the base."""
+        raise NotImplementedError
+
+    def _fast_insert_segment(self, key: Key) -> _WSB:
+        """Single-key insert shortcut; overridden per leaf. Not called on the base."""
         raise NotImplementedError
 
     def _dataset_write_builder(self, op_type: str, dataset: DataSet) -> _DSWB:
@@ -444,7 +449,7 @@ class SessionBase(Generic[_WSB, _QB, _TS, _DSWB]):
             :meth:`upsert`: Create or update.
         """
         if arg1.__class__ is Key and not keys:
-            return self._fast_write_segment("insert", arg1)  # type: ignore[arg-type]
+            return self._fast_insert_segment(arg1)  # type: ignore[arg-type]
         if isinstance(arg1, DataSet):
             if keys:
                 raise TypeError(_keys_need_key_first("insert", arg1))

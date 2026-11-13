@@ -44,15 +44,15 @@ def _stored_user_keys(cluster, dataset) -> set:
     }
 
 
-@pytest.mark.parametrize("marked, expect_marked_idempotent", [
+@pytest.mark.parametrize("marked, expect_marked_retryable", [
     pytest.param(_RETRYABLE_MARKED, True, id="send_key-on-retryable"),
     pytest.param(_NON_RETRYABLE_MARKED, False, id="send_key-on-non-retryable"),
 ])
-def test_write_resolves_scope_from_its_operations(cluster, marked, expect_marked_idempotent):
+def test_write_resolves_scope_from_its_operations(cluster, marked, expect_marked_retryable):
     """``send_key`` set on one write scope reaches exactly the writes of that kind."""
     dataset = DataSet.of(general_namespace(), f"bhv_retry_s_{marked.name}")
     session = cluster.create_session(marked)
-    keys = dataset.ids("u1", "i1", "b1", "b2", "a1", "ba1", "ba2")
+    keys = dataset.ids("u1", "b1", "b2", "i1", "g1", "a1", "ba1", "ba2")
     for key in keys:
         cluster.create_session().delete(key).execute()
     try:
@@ -61,10 +61,19 @@ def test_write_resolves_scope_from_its_operations(cluster, marked, expect_marked
         session.upsert(*dataset.ids("b1", "b2")).bin("v").set_to(1).execute()
         session.upsert(dataset.id("a1")).bin("v").add(1).execute()
         session.upsert(*dataset.ids("ba1", "ba2")).bin("v").add(1).execute()
+        # Created without the mark, so only the generation-checked update
+        # can have stored its key.
+        g1 = dataset.id("g1")
+        cluster.create_session().upsert(g1).bin("v").set_to(1).execute()
+        generation = (
+            cluster.create_session().query(g1).execute().first_or_raise()
+            .record.generation
+        )
+        session.update(g1).ensure_generation_is(generation).bin("v").set_to(2).execute()
 
-        idempotent = {"u1", "i1", "b1", "b2"}
-        non_idempotent = {"a1", "ba1", "ba2"}
-        expected = idempotent if expect_marked_idempotent else non_idempotent
+        retryable = {"u1", "b1", "b2"}
+        non_retryable = {"i1", "g1", "a1", "ba1", "ba2"}
+        expected = retryable if expect_marked_retryable else non_retryable
         assert _stored_user_keys(cluster, dataset) == expected
     finally:
         for key in keys:

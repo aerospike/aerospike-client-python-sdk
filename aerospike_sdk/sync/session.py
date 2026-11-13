@@ -55,7 +55,8 @@ from aerospike_sdk.sync.background import BackgroundTaskSession
 from aerospike_sdk.sync.info import InfoCommands
 from aerospike_sdk.sync.operations.index import IndexBuilder
 from aerospike_sdk.sync.operations.query import (
-    DataSetWriteBuilder, QueryBuilder, WriteSegmentBuilder, _SingleKeyWriteSegment,
+    DataSetWriteBuilder, QueryBuilder, WriteSegmentBuilder, _SingleKeyInsertSegment,
+    _SingleKeyWriteSegment,
 )
 from aerospike_sdk.sync.operations.udf import UdfFunctionBuilder
 
@@ -611,6 +612,27 @@ class Session(
             sdk_client=self._client,
             write_policy_nr=self._cached_write_policy_nr,
             write_policy_nr_sc=self._cached_write_policy_nr_sc,
+        )
+
+    def _fast_insert_segment(self, key: Key) -> WriteSegmentBuilder:
+        """Single-key insert segment (sync), built on the non-retryable policy pair."""
+        write_policy_nr = self._cached_write_policy_nr
+        write_policy_nr_sc = self._cached_write_policy_nr_sc
+        return _SingleKeyInsertSegment(
+            client=self._pnc_client,
+            key=key,
+            op_type="insert",
+            behavior=self._behavior,
+            write_policy=write_policy_nr,
+            read_policy=self._cached_read_policy,
+            write_policy_sc=write_policy_nr_sc,
+            read_policy_sc=self._cached_read_policy_sc,
+            txn=self._txn,
+            namespace_mode_resolver=None,
+            namespace_mode_resolver_blocking=self._resolve_namespace_mode_blocking,
+            sdk_client=self._client,
+            write_policy_nr=write_policy_nr,
+            write_policy_nr_sc=write_policy_nr_sc,
         )
 
     def _dataset_write_builder(self, op_type: str, dataset: DataSet) -> DataSetWriteBuilder:

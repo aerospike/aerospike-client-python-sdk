@@ -605,6 +605,11 @@ class _WriteSegmentBuilderBase(_ExpirationVerbs[_QB], _ChainVerbs[_QB]):
     def ensure_generation_is(self, generation: int) -> Self:
         """Set expected generation for optimistic locking on the current segment.
 
+        The check also moves the write to the behavior's non-retryable write
+        scope, so under ``Behavior.DEFAULT`` it is not retried: a retry after
+        an attempt that reached the server would fail the check with
+        ``GENERATION_ERROR`` although the write succeeded.
+
         Args:
             generation: The expected generation number (must be > 0).
 
@@ -613,10 +618,29 @@ class _WriteSegmentBuilderBase(_ExpirationVerbs[_QB], _ChainVerbs[_QB]):
 
         Raises:
             ValueError: If generation is <= 0.
+
+        Example::
+
+            accounts = DataSet.of("test", "accounts")
+            stream = await session.query(accounts.id(7)).execute()
+            current = await stream.first_or_raise()
+            await (
+                session.update(accounts.id(7))
+                .ensure_generation_is(current.record.generation)
+                .bin("balance").set_to(100)
+                .execute()
+            )
+
+        See Also:
+            :class:`~aerospike_sdk.exceptions.GenerationError`: Raised when
+                the record is at a different generation.
         """
         if generation <= 0:
             raise ValueError("Generation must be greater than 0")
-        self._qb._generation = generation
+        qb = self._qb
+        qb._generation = generation
+        # A retry after an in-doubt success would fail the check it passed.
+        qb._operations_retryable = False
         return self
 
     def with_durable_delete(self) -> Self:
@@ -1093,12 +1117,38 @@ class _RowWriteBuilderBase(Generic[_QB]):
     def ensure_generation_is(self, generation: int) -> Self:
         """Require the most recent row's record to be at *generation* when written.
 
+        The check also moves that row to the behavior's non-retryable write
+        scope, and with it the batch-level retry budget: a retry after an
+        attempt that reached the server would fail the check with
+        ``GENERATION_ERROR`` although the write succeeded.
+
+        Args:
+            generation: The expected generation number (must be > 0).
+
+        Returns:
+            self, for the next row or a per-row verb.
+
         Raises:
             ValueError: If generation is <= 0.
+
+        Example::
+
+            users = DataSet.of("test", "users")
+            await (
+                session.update(users).bins("name", "age")
+                .row(3, "Jane", 46).ensure_generation_is(4)
+                .execute()
+            )
+
+        See Also:
+            :class:`~aerospike_sdk.exceptions.GenerationError`: Reported on
+                the row whose record is at a different generation.
         """
         if generation <= 0:
             raise ValueError("Generation must be greater than 0")
-        self._require_row("ensure_generation_is")._generation = generation
+        qb = self._require_row("ensure_generation_is")
+        qb._generation = generation
+        qb._operations_retryable = False
         return self
 
     # -- Chain-wide verbs -------------------------------------------------------
@@ -1174,7 +1224,9 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
     _record_delete_in_fast_ops: bool = False
     # Cleared by the first non-idempotent op. The fast slots then hold the
     # non-retryable policy pair, and the retryable pair moves here so
-    # promotion can still hand the builder both.
+    # promotion can still hand the builder both. The insert segment is
+    # non-retryable from the start: its class default is ``False`` and it is
+    # constructed on the non-retryable pair, so it never pays for the swap.
     _retryable_fast: bool = True
     _write_policy_r: Optional[WritePolicy] = None
     _write_policy_r_sc: Optional[WritePolicy] = None

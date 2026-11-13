@@ -651,6 +651,21 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
         return self.execute(on_error)
 
 
+class _SingleKeyInsertSegment(_SingleKeyWriteSegment):
+    """Single-key insert fast path: non-retryable from construction.
+
+    A retry after an attempt that reached the server would report the record
+    as existing, so an insert never resolves the retryable write scope. The
+    session hands this segment the non-retryable policy pair in the write
+    slots; the class default below keeps promotion and a transaction-bound
+    resolve on the same scope without a per-instance store.
+    """
+
+    __slots__ = ()
+
+    _retryable_fast = False
+
+
 class RowWriteBuilder(_RowWriteBuilderBase["QueryBuilder"]):
     """Rows of a tabular write, executed on the sync runtime.
 

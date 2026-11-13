@@ -385,13 +385,16 @@ gives retryable writes two retries and non-retryable writes none.
 | `add`, `append`, `prepend` | non-retryable |
 | Any list, map, bit, HLL, string, or expression modify | non-retryable |
 | UDF | non-retryable |
+| `insert` | non-retryable |
+| Any write with `ensure_generation_is` | non-retryable |
 | `add_operation(op)` | by the operation's own `is_idempotent` |
 | Batch | each row by its own operations; the batch-level retry budget is retryable only when every row is |
 | Background job | by its operations; a UDF job is non-retryable |
 
-`insert` follows the same rule, so it is retryable. If a first attempt
-reached the server and only its reply was lost, the retry reports
-`KEY_EXISTS_ERROR`; the error carries `in_doubt` either way.
+An insert and a generation check take a write off the retryable scope
+whatever its operations are. If a first attempt reached the server and only
+its reply was lost, a retry would fail a write that succeeded: an insert
+with `KEY_EXISTS_ERROR`, a generation check with `GENERATION_ERROR`.
 
 ```python
 critical = Behavior.DEFAULT.derive_with_changes(

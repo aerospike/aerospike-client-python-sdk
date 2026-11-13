@@ -333,8 +333,9 @@ class _OperationSpec:
 
     ``retryable`` is ``False`` once the segment carries an operation that is
     not idempotent (``add``, ``append``, ``prepend``, any list, map, bit,
-    HLL, string, or expression modify) or a UDF; it selects the behavior's
-    retryable or non-retryable write scope.
+    HLL, string, or expression modify), a generation check, or a UDF, and
+    for every insert; it selects the behavior's retryable or non-retryable
+    write scope.
     """
 
     keys: List[Key]
@@ -364,7 +365,7 @@ class _OperationSpec:
 
 
 def _write_kind(spec: _OperationSpec) -> OpKind:
-    """The behavior scope a write spec resolves: retryable only when every op is idempotent."""
+    """The behavior scope a write spec resolves; see ``_OperationSpec.retryable``."""
     return OpKind.WRITE_RETRYABLE if spec.retryable else OpKind.WRITE_NON_RETRYABLE
 
 
@@ -461,8 +462,8 @@ class _QueryBuilderBase:
     _durable_delete: Optional[bool] = None
     _durable_delete_command_default: Optional[bool] = None
     _record_delete_in_operations: bool = False
-    # Cleared by the first non-idempotent operation queued on the segment;
-    # see ``_OperationSpec.retryable``.
+    # Cleared by the first non-idempotent operation queued on the segment,
+    # or by a generation check; see ``_OperationSpec.retryable``.
     _operations_retryable: bool = True
     # Puts queued ahead of ``_operations``; see ``_OperationSpec.put_bins``.
     _put_bins: Optional[Dict[str, Any]] = None
@@ -1543,7 +1544,7 @@ class _QueryBuilderBase:
             self._durable_delete,
             self._durable_delete_command_default,
             self._record_delete_in_operations,
-            self._operations_retryable,
+            self._operations_retryable and self._op_type != "insert",
         ))
 
         self._single_key = None
