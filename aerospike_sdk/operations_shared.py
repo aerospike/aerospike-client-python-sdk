@@ -1133,6 +1133,7 @@ class _RowWriteBuilderBase(Generic[_QB]):
 
         Example::
 
+            users = DataSet.of("test", "users")
             await (
                 session.update(users).bins("name", "age")
                 .row(3, "Jane", 46).ensure_generation_is(4)
