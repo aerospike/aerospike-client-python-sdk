@@ -245,12 +245,18 @@ class DataSet:
         See Also:
             :meth:`id`: Single-key helper.
         """
-        # Handle case where a single list is passed
+        # One call builds every key: a key per identifier in a Python loop
+        # hands the namespace and set across once per key, which costs more
+        # and makes threads contend on those two strings.
         if len(identifiers) == 1 and isinstance(identifiers[0], list):
-            return [self.id_for_object(id_obj) for id_obj in identifiers[0]]
+            try:
+                return Key.from_user_keys(self._namespace, self._set_name, identifiers[0])
+            except ValueError:
+                # An element the bulk call refuses may still convert, such as
+                # a whole float; the per-element path decides and reports it.
+                return [self.id_for_object(id_obj) for id_obj in identifiers[0]]
 
-        # Handle multiple positional arguments
-        return [self.id(id_obj) for id_obj in identifiers]
+        return Key.from_user_keys(self._namespace, self._set_name, identifiers)
 
     def ids_from_digests(self, *digests: Union[str, bytes]) -> List[Key]:
         """

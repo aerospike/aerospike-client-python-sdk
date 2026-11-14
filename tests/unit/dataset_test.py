@@ -248,6 +248,36 @@ class TestDataSetIds:
         assert isinstance(keys[1].value, int)
         assert keys[2].value == b"key3"
 
+    def test_ids_match_keys_built_one_at_a_time(self):
+        """Both call forms give the keys id() gives, digests included."""
+        dataset = DataSet.of("test", "users")
+        identifiers = ["user1", 2, b"key3"]
+        expected = [dataset.id(identifier).digest for identifier in identifiers]
+
+        assert [key.digest for key in dataset.ids(identifiers)] == expected
+        assert [key.digest for key in dataset.ids(*identifiers)] == expected
+
+    def test_ids_with_list_converts_whole_float_and_bytearray(self):
+        """The list form accepts what id_for_object() accepts."""
+        dataset = DataSet.of("test", "users")
+        keys = dataset.ids(["user1", 2.0, bytearray(b"key3")])
+
+        assert keys[1].value == 2
+        assert isinstance(keys[1].value, int)
+        assert keys[2].value == b"key3"
+
+    def test_ids_with_list_rejects_unsupported_type(self):
+        """The list form refuses an identifier that cannot be a key."""
+        dataset = DataSet.of("test", "users")
+        with pytest.raises(TypeError):
+            dataset.ids(["user1", 1.5])
+
+    def test_ids_with_no_identifiers(self):
+        """No identifiers gives no keys in either form."""
+        dataset = DataSet.of("test", "users")
+        assert dataset.ids() == []
+        assert dataset.ids([]) == []
+
 
 class TestDataSetIdFromDigest:
     """Test DataSet.id_from_digest() method."""
