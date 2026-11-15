@@ -138,13 +138,14 @@ class AsyncPool:
     collapse beyond 4 loops. Controlled via the ``per_client_runtime``
     kwarg; see its docstring for the threshold rationale and override.
 
-    **Event loop policy.**  uvloop's libuv free-threading race on
-    ``loop._ready_len`` (MagicStack/uvloop issues #720, #721) would stall a
-    multi-loop pool under a free-threaded (GIL-off) build — the per-loop race
-    fires across all loops at once and wedges.  Pool loops therefore use
-    uvloop under FT only when the race is mitigated: PNC's pipe-wake transport
-    active (the default) or a fixed uvloop release; otherwise they fall back to
-    the stdlib selector loop.  Under GIL-on Python the race can't fire, so
+    **Event loop policy.**  Pool loops use uvloop by default.  uvloop 0.22.x
+    had a libuv free-threading race on ``loop._ready_len`` (MagicStack/uvloop
+    issues #720, #721) that stalls a multi-loop pool under a free-threaded
+    (GIL-off) build; PNC requires uvloop 0.23 or later, which fixes it, and its
+    pipe-wake transport (on by default) keeps cross-thread wakes off the racy
+    path as well.  Under FT the pool falls back to the stdlib selector loop
+    only when neither holds: an older uvloop installed around that floor with
+    the transport turned off.  Under GIL-on Python the race can't fire, so
     uvloop is always used.  Override with the ``use_uvloop`` kwarg.
 
     **Tuning notes** (8-core remote-cluster measurement, FT 3.14t):
@@ -232,15 +233,15 @@ class AsyncPool:
                 uvloop policy is installed process-wide).
 
                 * ``None`` (default): auto. Under GIL-on Python, enabled. Under
-                  free-threading, enabled when uvloop's libuv race
-                  (MagicStack/uvloop #720, #721) is mitigated — PNC's pipe-wake
-                  transport active (``AEROSPIKE_PIPE_WAKE`` != ``0``, the
-                  default) or a fixed uvloop release — otherwise the stdlib
-                  selector loop is used.
+                  free-threading, enabled when the installed uvloop is 0.23
+                  or later (the floor PNC requires, which fixes the libuv
+                  race, MagicStack/uvloop #720, #721) or PNC's pipe-wake
+                  transport is active (``AEROSPIKE_PIPE_WAKE`` != ``0``, the
+                  default) — otherwise the stdlib selector loop is used.
                 * ``True``: force uvloop on the pool loops (only takes effect
-                  if a uvloop policy is installed). Under free-threading without
-                  the pipe-wake transport or a fixed uvloop this can stall the
-                  fast-path pool — opt in only after validating your workload.
+                  if a uvloop policy is installed). Under free-threading with
+                  an older uvloop and the pipe-wake transport turned off this
+                  can stall the fast-path pool.
                 * ``False``: force the stdlib ``SelectorEventLoop`` on every
                   pool loop regardless of the global event-loop policy.
 
