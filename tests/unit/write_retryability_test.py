@@ -18,8 +18,9 @@
 A write whose operations are all idempotent (puts, deletes, touches, reads)
 resolves ``WRITE_RETRYABLE``; one that carries ``add``, ``append``,
 ``prepend``, any list, map, bit, HLL, string, or expression modify, or a UDF
-resolves ``WRITE_NON_RETRYABLE``. A batch is retryable only when every write
-row is. A background job classifies by its operations the same way.
+resolves ``WRITE_NON_RETRYABLE``, as does an insert or any write with a
+generation check. A batch is retryable only when every write row is. A
+background job classifies by its operations the same way.
 
 The probe is ``send_key``: it is set on exactly one of the two scopes, so the
 policy a write hands to PNC shows which scope resolved. The retry budget under
@@ -272,7 +273,11 @@ def _row_send_key(pnc) -> bool:
 # Each case: (id, build, expected_retryable). ``build`` returns an executable.
 _CASES = [
     ("upsert-set_to", lambda s: s.upsert(_key()).bin("v").set_to(1), True),
-    ("insert-set_to", lambda s: s.insert(_key()).bin("v").set_to(1), True),
+    ("insert-set_to", lambda s: s.insert(_key()).bin("v").set_to(1), False),
+    ("insert-put", lambda s: s.insert(_key()).put({"v": 1}), False),
+    # A per-segment verb moves the single-key insert off its fast path.
+    ("insert-put-with-ttl",
+     lambda s: s.insert(_key()).put({"v": 1}).expire_record_after_seconds(60), False),
     ("update-set_to", lambda s: s.update(_key()).bin("v").set_to(1), True),
     ("upsert-put", lambda s: s.upsert(_key()).put({"v": 1}), True),
     ("upsert-remove_bin", lambda s: s.upsert(_key()).remove_bin("v"), True),
@@ -290,14 +295,41 @@ _CASES = [
     ("upsert-raw-put", lambda s: s.upsert(_key()).add_operation(Operation.put("v", 1)), True),
     ("upsert-raw-add", lambda s: s.upsert(_key()).add_operation(Operation.add("v", 1)), False),
     ("udf", lambda s: s.execute_udf(_key()).function("pkg", "fn"), False),
+    ("upsert-set_to-generation",
+     lambda s: s.upsert(_key()).bin("v").set_to(1).ensure_generation_is(3), False),
+    ("upsert-generation-then-set_to",
+     lambda s: s.upsert(_key()).ensure_generation_is(3).bin("v").set_to(1), False),
+    ("delete-generation", lambda s: s.delete(_key()).ensure_generation_is(3), False),
+    ("touch-generation", lambda s: s.touch(_key()).ensure_generation_is(3), False),
     ("batch-upsert-set_to", lambda s: s.upsert(_key(1), _key(2)).bin("v").set_to(1), True),
     ("batch-upsert-add", lambda s: s.upsert(_key(1), _key(2)).bin("v").add(1), False),
+    # Unbinding the transaction drops the cached policy, so the scope is
+    # resolved again from the segment's own kind.
+    ("insert-put-with_txn-none",
+     lambda s: s.insert(_key()).put({"v": 1}).with_txn(None), False),
+    ("batch-insert-set_to", lambda s: s.insert(_key(1), _key(2)).bin("v").set_to(1), False),
     ("batch-delete", lambda s: s.delete(_key(1), _key(2)), True),
     ("batch-touch", lambda s: s.touch(_key(1), _key(2)), True),
+    ("batch-upsert-set_to-generation",
+     lambda s: s.upsert(_key(1), _key(2)).bin("v").set_to(1).ensure_generation_is(3), False),
     # Rows resolve their own kind; the parent budget is checked separately below.
     ("chain-set_to-then-add-row",
      lambda s: s.upsert(_key(1)).bin("v").set_to(1).upsert(_key(2)).bin("v").add(1),
      [True, False]),
+    ("chain-generation-then-plain-row",
+     lambda s: (s.upsert(_key(1)).bin("v").set_to(1).ensure_generation_is(3)
+                .upsert(_key(2)).bin("v").set_to(2)),
+     [False, True]),
+    ("chain-insert-then-upsert",
+     lambda s: s.insert(_key(1)).bin("v").set_to(1).upsert(_key(2)).bin("v").set_to(2),
+     [False, True]),
+    ("chain-upsert-then-insert",
+     lambda s: s.upsert(_key(1)).bin("v").set_to(1).insert(_key(2)).bin("v").set_to(2),
+     [True, False]),
+    ("rows-insert", lambda s: s.insert(DS).bins("v").row(1, 1).row(2, 2), False),
+    ("rows-generation-on-one-row",
+     lambda s: s.upsert(DS).bins("v").row(1, 1).ensure_generation_is(3).row(2, 2),
+     [False, True]),
     ("chain-set_to-twice",
      lambda s: s.upsert(_key(1)).bin("v").set_to(1).upsert(_key(2)).bin("v").set_to(2), True),
     ("background-update-set_to",
@@ -363,6 +395,16 @@ async def test_default_behavior_retries_only_idempotent_writes(make_session):
 
     session, pnc = make_session(Behavior.DEFAULT)
     await _run(session.upsert(_key()).bin("v").add(1))
+    assert {p.max_retries for p in _sent_write_policies(pnc)} == {0}
+
+    # A retry after an in-doubt success would report the record as existing.
+    session, pnc = make_session(Behavior.DEFAULT)
+    await _run(session.insert(_key()).bin("v").set_to(1))
+    assert {p.max_retries for p in _sent_write_policies(pnc)} == {0}
+
+    # A retry after an in-doubt success would fail the generation check.
+    session, pnc = make_session(Behavior.DEFAULT)
+    await _run(session.upsert(_key()).bin("v").set_to(1).ensure_generation_is(3))
     assert {p.max_retries for p in _sent_write_policies(pnc)} == {0}
 
 
