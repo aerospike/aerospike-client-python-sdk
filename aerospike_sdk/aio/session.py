@@ -61,6 +61,7 @@ from aerospike_sdk.aio.operations.query import (
     DataSetWriteBuilder,
     QueryBuilder,
     WriteSegmentBuilder,
+    _SingleKeyInsertSegment,
     _SingleKeyWriteSegment,
 )
 from aerospike_sdk.aio.operations.udf import UdfFunctionBuilder
@@ -746,6 +747,30 @@ class Session(
             self._client,
             self._cached_write_policy_nr,
             self._cached_write_policy_nr_sc,
+        )
+
+    def _fast_insert_segment(self, key: Key) -> WriteSegmentBuilder:
+        """Single-key insert shortcut, built on the non-retryable policy pair.
+
+        Positional for the same reason as :meth:`_fast_write_segment`.
+        """
+        write_policy_nr = self._cached_write_policy_nr
+        write_policy_nr_sc = self._cached_write_policy_nr_sc
+        return _SingleKeyInsertSegment(
+            self._client._async_client,
+            key,
+            "insert",
+            self._behavior,
+            write_policy_nr,
+            self._cached_read_policy,
+            self._txn,
+            self._resolve_namespace_mode,
+            self._resolve_namespace_mode_blocking,
+            write_policy_nr_sc,
+            self._cached_read_policy_sc,
+            self._client,
+            write_policy_nr,
+            write_policy_nr_sc,
         )
 
     # -- Read entry point -----------------------------------------------------

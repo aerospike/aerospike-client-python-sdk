@@ -92,6 +92,9 @@ BINS = [INDEX_BIN, PAYLOAD_BIN]
 ASYNC_MODES = ("pnc-async", "psdk-async", "pnc-batch-stream", "psdk-batch-stream")
 THREAD_MODES = ("pnc-blocking", "legacy-sync")
 
+ALL_PARTITIONS = 4096
+PARTITION_MODES = ("pnc-async", "pnc-blocking")
+
 QueryFn = Callable[[int, int], Awaitable[int]]
 CloseFn = Callable[[], Awaitable[None]]
 
@@ -115,12 +118,19 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--warmup", type=float, default=3.0, help="unmeasured seconds first")
     p.add_argument("--records", type=int, default=200_000,
                    help="records in the dataset (query ranges are drawn from it)")
+    p.add_argument("--partitions", type=int, default=ALL_PARTITIONS, metavar="N",
+                   help="query only partitions 0..N-1 (pnc-async, pnc-blocking); each query "
+                        "still matches exactly --rows records")
     p.add_argument("--load", type=int, default=0, metavar="N",
                    help="truncate, write N records, create the index, then exit")
     p.add_argument("--payload", type=int, default=256, help="payload bytes per record (load)")
     args = p.parse_args()
     if args.point_readers and args.mode not in ("pnc-async", "psdk-async"):
         p.error("--point-readers requires --mode pnc-async or psdk-async")
+    if not 1 <= args.partitions <= ALL_PARTITIONS:
+        p.error(f"--partitions must be between 1 and {ALL_PARTITIONS}")
+    if args.partitions != ALL_PARTITIONS and args.mode not in PARTITION_MODES:
+        p.error("--partitions requires --mode pnc-async or pnc-blocking")
     if args.mode == "legacy-sync" and aerospike is None:
         p.error("legacy-sync needs the legacy aerospike package")
     return args
@@ -170,7 +180,36 @@ class Recorder:
         self.lat_ns: List[int] = []
 
 
+def records_in_partitions(args: argparse.Namespace) -> List[int] | None:
+    """Index values of the records that live in partitions ``0..N-1``, in order.
+
+    ``None`` when every partition is queried. With fewer, a query range is
+    drawn from this list so it still matches exactly ``--rows`` records and
+    the wrong-count check keeps its meaning.
+    """
+    if args.partitions == ALL_PARTITIONS:
+        return None
+    members = [
+        i for i in range(args.records)
+        if Key(args.namespace, args.set_name, i).partition_id < args.partitions
+    ]
+    if len(members) < args.rows:
+        sys.exit(f"only {len(members)} records in {args.partitions} partitions; "
+                 f"--rows {args.rows} cannot be matched")
+    return members
+
+
+def partition_filter_for(args: argparse.Namespace) -> Callable[[], PartitionFilter]:
+    if args.partitions == ALL_PARTITIONS:
+        return PartitionFilter.all
+    return lambda: PartitionFilter.by_range(0, args.partitions)
+
+
 def range_for(rng: random.Random, args: argparse.Namespace) -> tuple[int, int]:
+    members = args.members
+    if members is not None:
+        first = rng.randrange(0, len(members) - args.rows + 1)
+        return members[first], members[first + args.rows - 1]
     lo = rng.randrange(0, args.records - args.rows + 1)
     return lo, lo + args.rows - 1
 
@@ -178,12 +217,12 @@ def range_for(rng: random.Random, args: argparse.Namespace) -> tuple[int, int]:
 async def pnc_async_query(args: argparse.Namespace) -> Tuple[QueryFn, CloseFn, object]:
     client = await new_client(ClientPolicy(), args.host)
     qp = QueryPolicy()
-    pf_all = PartitionFilter.all
+    partition_filter = partition_filter_for(args)
 
     async def one_query(lo: int, hi: int) -> int:
         stmt = Statement(args.namespace, args.set_name, BINS)
         stmt.filters = [Filter.range(INDEX_BIN, lo, hi)]
-        rs = await client.query(stmt, pf_all(), policy=qp)
+        rs = await client.query(stmt, partition_filter(), policy=qp)
         count = 0
         async for r in rs:
             r.bins[INDEX_BIN]
@@ -329,12 +368,13 @@ def run_threads(args: argparse.Namespace, one_query: Callable[[int, int], int],
 def pnc_blocking_query(args: argparse.Namespace) -> Callable[[int, int], int]:
     client = new_client_blocking(ClientPolicy(), args.host)
     qp = QueryPolicy()
+    partition_filter = partition_filter_for(args)
 
     def one_query(lo: int, hi: int) -> int:
         stmt = Statement(args.namespace, args.set_name, BINS)
         stmt.filters = [Filter.range(INDEX_BIN, lo, hi)]
         count = 0
-        for r in client.query_blocking(stmt, PartitionFilter.all(), policy=qp):
+        for r in client.query_blocking(stmt, partition_filter(), policy=qp):
             r.bins[INDEX_BIN]
             count += 1
         return count
@@ -371,6 +411,7 @@ def main() -> None:
     if args.load:
         asyncio.run(load(args))
         return
+    args.members = records_in_partitions(args)
 
     window = {"measuring": False, "stop": False, "cpu0": 0.0, "t0": 0.0, "cpu1": 0.0, "t1": 0.0}
 
@@ -412,6 +453,7 @@ def main() -> None:
     print(json.dumps({
         "mode": args.mode,
         "rows": args.rows,
+        "partitions": args.partitions,
         "concurrency": args.concurrency,
         "queries": queries,
         "records": records,
