@@ -31,7 +31,7 @@ from aerospike_native import FilterExpression
 
 from aerospike_sdk import BinDataType, Behavior, Key, Order, ResultCode
 from aerospike_sdk.aio.operations.query import QueryBuilder
-from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk.exceptions import AerospikeError, InvalidArgumentError, PncValueError
 from aerospike_sdk.policy.behavior_settings import Mode
 from aerospike_sdk.sync.operations.query import QueryBuilder as SyncQueryBuilder
 
@@ -66,9 +66,22 @@ def _keys(statement) -> list[tuple[str, BinDataType, Order]]:
     return [(k.bin_name, k.data_type, k.order) for k in statement.order_by]
 
 
-def _assert_parameter_error(exc_info: pytest.ExceptionInfo, fragment: str) -> None:
+def _ranked(qb: QueryBuilder) -> QueryBuilder:
+    return qb.order_by("price", BinDataType.DOUBLE, Order.ASC).top_k(5)
+
+
+def _pnc_refusal() -> PncValueError:
+    message = "Invalid argument: order_by/top_k is not supported by all nodes in the cluster"
+    exc = PncValueError(f"Error 4: {message}")
+    exc.result_code = ResultCode.PARAMETER_ERROR
+    exc.base_message = message
+    return exc
+
+
+def _assert_refused(exc_info: pytest.ExceptionInfo, fragment: str) -> None:
     exc = exc_info.value
-    assert exc.result_code == ResultCode.PARAMETER_ERROR
+    assert type(exc) is InvalidArgumentError
+    assert exc.result_code == ResultCode.INVALID_ARGUMENT
     assert fragment in str(exc)
     # A client-side refusal must not send the reader to a server setting.
     assert exc.hint is None
@@ -104,20 +117,20 @@ class TestBuilderChecks:
         qb = _builder().order_by("price", BinDataType.DOUBLE, Order.ASC)
         with pytest.raises(AerospikeError) as exc_info:
             qb._build_dataset_read_statement()
-        _assert_parameter_error(exc_info, "got order_by=True, top_k=False")
+        _assert_refused(exc_info, "got order_by=True, top_k=False")
 
     @pytest.mark.parametrize("k", [0, -1, 1001])
     def test_k_out_of_range_is_refused_at_chain_time(self, k):
         with pytest.raises(AerospikeError) as exc_info:
             _builder().top_k(k)
-        _assert_parameter_error(exc_info, f"top_k(k) must be in [1, 1000]; got {k}")
+        _assert_refused(exc_info, f"top_k(k) must be in [1, 1000]; got {k}")
 
     @pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
     def test_then_order_by_before_order_by_is_refused_at_chain_time(self, sync):
         qb = _builder(sync=sync).top_k(3)
         with pytest.raises(AerospikeError) as exc_info:
             qb.then_order_by("price", BinDataType.DOUBLE, Order.ASC)
-        _assert_parameter_error(exc_info, "needs an earlier order_by(...)")
+        _assert_refused(exc_info, "needs an earlier order_by(...)")
         assert qb._order_keys is None
 
     @pytest.mark.parametrize("k", [1, 1000])
@@ -128,7 +141,7 @@ class TestBuilderChecks:
     def test_top_k_without_order_by(self):
         with pytest.raises(AerospikeError) as exc_info:
             _builder().top_k(5)._build_dataset_read_statement()
-        _assert_parameter_error(exc_info, "got order_by=False, top_k=True")
+        _assert_refused(exc_info, "got order_by=False, top_k=True")
 
     @pytest.mark.parametrize(
         "knob, fragment",
@@ -144,7 +157,7 @@ class TestBuilderChecks:
         knob(qb)
         with pytest.raises(AerospikeError) as exc_info:
             qb._build_dataset_read_statement()
-        _assert_parameter_error(exc_info, fragment)
+        _assert_refused(exc_info, fragment)
 
     @pytest.mark.parametrize("batch", [False, True], ids=["point", "batch"])
     def test_key_query_is_refused_at_chain_time(self, batch):
@@ -156,7 +169,7 @@ class TestBuilderChecks:
             qb._single_key = key
         with pytest.raises(AerospikeError) as exc_info:
             qb.order_by("price", BinDataType.DOUBLE, Order.ASC)
-        _assert_parameter_error(exc_info, "not a key query")
+        _assert_refused(exc_info, "not a key query")
         with pytest.raises(AerospikeError):
             qb.top_k(5)
 
@@ -168,7 +181,7 @@ class TestBuilderChecks:
         )
         with pytest.raises(AerospikeError) as exc_info:
             qb._build_dataset_read_statement()
-        _assert_parameter_error(exc_info, "not supported by all nodes")
+        _assert_refused(exc_info, "not supported by all nodes")
 
     def test_capable_cluster_passes_the_gate(self):
         qb = (
@@ -227,7 +240,7 @@ class TestBothDispatchBranches:
         with patch("aerospike_sdk.query_shared.filter_expression_from_ael_string", _server_compiled):
             with pytest.raises(AerospikeError) as exc_info:
                 await qb._execute_dataset_query()
-        assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+        assert exc_info.value.result_code == ResultCode.INVALID_ARGUMENT
         client.query.assert_not_awaited()
         client.query_explain.assert_not_awaited()
         client.query_with_plan.assert_not_awaited()
@@ -257,7 +270,41 @@ class TestBothDispatchBranches:
         with patch("aerospike_sdk.query_shared.filter_expression_from_ael_string", _server_compiled):
             with pytest.raises(AerospikeError) as exc_info:
                 qb._execute_dataset_query_blocking()
-        assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+        assert exc_info.value.result_code == ResultCode.INVALID_ARGUMENT
         client.query_blocking.assert_not_called()
         client.query_explain_blocking.assert_not_called()
         client.query_with_plan_blocking.assert_not_called()
+
+
+class TestPncRefusalCodes:
+
+    def test_only_a_ranked_query_renumbers_a_refusal(self):
+        unranked = _builder()._query_error_converter()(_pnc_refusal())
+        assert type(unranked) is InvalidArgumentError
+        assert unranked.result_code == ResultCode.PARAMETER_ERROR
+        ranked = _ranked(_builder())._query_error_converter()(_pnc_refusal())
+        assert type(ranked) is InvalidArgumentError
+        assert ranked.result_code == ResultCode.INVALID_ARGUMENT
+        assert str(ranked).startswith("Error -28: ")
+
+    @pytest.mark.asyncio
+    async def test_async_refusal_mid_stream_takes_the_client_code(self):
+        recordset = MagicMock()
+        recordset._next_batch = AsyncMock(side_effect=_pnc_refusal())
+        client = MagicMock()
+        client.query = AsyncMock(return_value=recordset)
+        stream = await _ranked(_builder(client))._execute_dataset_query()
+        with pytest.raises(InvalidArgumentError) as exc_info:
+            async for _ in stream:
+                pass
+        assert exc_info.value.result_code == ResultCode.INVALID_ARGUMENT
+
+    def test_sync_refusal_mid_stream_takes_the_client_code(self):
+        recordset = MagicMock()
+        recordset.__iter__.side_effect = _pnc_refusal()
+        client = MagicMock()
+        client.query_blocking.return_value = recordset
+        stream = _ranked(_builder(client, sync=True)).execute()
+        with pytest.raises(InvalidArgumentError) as exc_info:
+            list(stream)
+        assert exc_info.value.result_code == ResultCode.INVALID_ARGUMENT

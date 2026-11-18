@@ -240,7 +240,7 @@ class QueryBuilder(_QueryBuilderBase, _BlockingQueryDispatch, _WriteVerbs["Write
         if stream_kind is not None:
             kind, payload = stream_kind
             if kind == "recordset":
-                return RecordStream._from_pnc_recordset(payload)
+                return RecordStream._from_pnc_recordset(payload, self._query_error_converter())
             if kind == "chunked":
                 recordset, reexecute, chunk_total_limit = payload
                 return RecordStream._from_chunked_pnc_recordset(

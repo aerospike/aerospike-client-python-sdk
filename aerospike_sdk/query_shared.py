@@ -155,7 +155,9 @@ from aerospike_sdk.implicit_txn import (
     implicit_txn_enabled,
 )
 from aerospike_sdk.exceptions import (
+    AerospikeError,
     _convert_pnc_exception,
+    _convert_ranked_query_error,
     _result_code_to_exception,
 )
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape, Settings
@@ -1258,10 +1260,11 @@ class _QueryBuilderBase:
             This builder for chaining.
 
         Raises:
-            AerospikeError: ``ResultCode.PARAMETER_ERROR`` on a key query. At
+            InvalidArgumentError: ``ResultCode.INVALID_ARGUMENT`` on a key query. At
                 execute, also when :meth:`top_k` is missing, when combined
                 with :meth:`limit`, :meth:`chunk_size` or :meth:`with_no_bins`,
-                or when a node cannot rank.
+                or when a node cannot rank, including one that joins while
+                the query streams.
 
         See Also:
             :meth:`then_order_by`: Second key, compared when the first ties.
@@ -1297,7 +1300,7 @@ class _QueryBuilderBase:
             This builder for chaining.
 
         Raises:
-            AerospikeError: ``ResultCode.PARAMETER_ERROR`` on a key query or
+            InvalidArgumentError: ``ResultCode.INVALID_ARGUMENT`` on a key query or
                 with no earlier :meth:`order_by`, or at execute for a third
                 key or a repeated bin.
 
@@ -1335,7 +1338,7 @@ class _QueryBuilderBase:
             This builder for chaining.
 
         Raises:
-            AerospikeError: ``ResultCode.PARAMETER_ERROR`` on a key query or
+            InvalidArgumentError: ``ResultCode.INVALID_ARGUMENT`` on a key query or
                 when ``k`` is outside 1 to 1000, or at execute when no
                 :meth:`order_by` key is set.
 
@@ -1388,7 +1391,11 @@ class _QueryBuilderBase:
             )
         sdk_client = self._sdk_client
         if sdk_client is not None and not sdk_client.supports_query_top_k:
-            self._raise_top_k_conflict("Top-K is not supported by all nodes in the cluster")
+            # PNC refuses the same cluster, with this message, when a node that
+            # cannot rank joins mid-query; both refusals must look alike.
+            self._raise_top_k_conflict(
+                "order_by/top_k is not supported by all nodes in the cluster"
+            )
         keys = cast(List[Tuple[str, BinDataType, Order]], self._order_keys)
         statement.set_order_by(*keys[0])
         for key in keys[1:]:
@@ -1398,8 +1405,19 @@ class _QueryBuilderBase:
     @staticmethod
     def _raise_top_k_conflict(message: str) -> NoReturn:
         raise _result_code_to_exception(
-            ResultCode.PARAMETER_ERROR, message, from_server=False,
+            ResultCode.INVALID_ARGUMENT, message, from_server=False,
         )
+
+    def _query_error_converter(self) -> Callable[[Exception], AerospikeError]:
+        """How this query's failures convert, at execute and while streaming.
+
+        A ranked query reports every client refusal with ``INVALID_ARGUMENT``.
+        Any other query keeps ``PARAMETER_ERROR`` for them, the code existing
+        handlers match on.
+        """
+        if self._top_k is None:
+            return _convert_pnc_exception
+        return _convert_ranked_query_error
 
     def with_hint(self, hint: QueryHint) -> Self:
         """Attach a query hint for secondary index selection or scheduling.

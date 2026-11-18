@@ -67,9 +67,6 @@ from aerospike_sdk.implicit_txn import (
     run_in_implicit_txn,
     stamp_txn,
 )
-from aerospike_sdk.exceptions import (
-    _convert_pnc_exception,
-)
 from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape
 from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.awaitable_context import AwaitableContext
@@ -968,6 +965,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
         partition_filter = self._partition_filter or PartitionFilter.all()
 
         statement = self._build_dataset_read_statement()
+        convert_error = self._query_error_converter()
 
         try:
             recordset, plan = await self._run_dataset_query_async(
@@ -975,7 +973,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
                 use_server_query_selection=use_server_query_selection,
             )
         except Exception as e:
-            raise _convert_pnc_exception(e) from e
+            raise convert_error(e) from e
 
         if self._chunk_size is not None and self._chunk_size > 0:
             client = self._client
@@ -995,7 +993,7 @@ class QueryBuilder(_QueryBuilderBase, _WriteVerbs["WriteSegmentBuilder"]):
                 limit=chunk_total_limit,
             )
 
-        return RecordStream._from_pnc_recordset(recordset)
+        return RecordStream._from_pnc_recordset(recordset, convert_error)
 
 
 class WriteSegmentBuilder(_WriteSegmentBuilderBase["QueryBuilder"], _WriteVerbs["WriteSegmentBuilder"]):

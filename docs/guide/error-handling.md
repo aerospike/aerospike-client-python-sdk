@@ -13,6 +13,7 @@ AerospikeError
 │   ├── AuthenticationError
 │   └── AuthorizationError
 ├── GenerationError
+├── InvalidArgumentError
 ├── InvalidNamespaceError
 ├── InvalidNodeError
 ├── BackoffError
@@ -48,6 +49,16 @@ covers `BinExistsError`, `BinNotFoundError`, `BinTypeError`, and
 `BinOpInvalidError`), or a leaf class for a specific outcome. The
 secondary-index base is named `SecondaryIndexError` rather than `IndexError` so
 it does not shadow Python's built-in `IndexError`.
+
+`InvalidArgumentError` is raised when a check the client makes before sending
+an operation fails, such as a Top-K `k` outside 1 to 1000. Any refusal of a
+Top-K query carries `ResultCode.INVALID_ARGUMENT` (`-28`), a code only the
+client assigns. A refusal of any other operation carries
+`ResultCode.PARAMETER_ERROR`, the code existing handlers match on; a server
+that rejects an argument also reports that code, on a plain `AerospikeError`.
+Other argument checks raise a built-in `ValueError` or `TypeError` with no
+result code. `InvalidArgumentError` is also a `ValueError`, so an existing
+`except ValueError` handler catches it.
 
 Import from the top-level package:
 

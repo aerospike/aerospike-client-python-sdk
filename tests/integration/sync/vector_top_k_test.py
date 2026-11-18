@@ -18,7 +18,7 @@
 import pytest
 
 from aerospike_sdk import BinDataType, DataSet, Order, ResultCode
-from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk.exceptions import InvalidArgumentError
 from tests.integration.namespace import general_namespace
 from tests.pnc_compat import requires_query_selection, requires_query_top_k
 
@@ -57,7 +57,7 @@ def test_ranked_query(session, where, expected):
 
 @requires_query_top_k
 def test_key_the_projection_does_not_return_is_refused(session):
-    with pytest.raises(AerospikeError) as exc_info:
+    with pytest.raises(InvalidArgumentError) as exc_info:
         (
             session.query(_DS)
             .bins("in_stock")
@@ -65,5 +65,5 @@ def test_key_the_projection_does_not_return_is_refused(session):
             .top_k(3)
             .execute()
         )
-    assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+    assert exc_info.value.result_code == ResultCode.INVALID_ARGUMENT
     assert "'price'" in str(exc_info.value)

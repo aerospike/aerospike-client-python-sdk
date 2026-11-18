@@ -42,6 +42,7 @@ from aerospike_sdk.exceptions import (
     GenerationError,
     IndexAlreadyExistsError,
     IndexNotFoundError,
+    InvalidArgumentError,
     InvalidNamespaceError,
     InvalidNodeError,
     BatchError,
@@ -54,6 +55,7 @@ from aerospike_sdk.exceptions import (
     RecordTooBigError,
     _result_code_to_exception,
     ResultCode,
+    _with_invalid_argument_code,
     SecondaryIndexError,
     SecurityError,
     SerializationError,
@@ -164,6 +166,11 @@ class TestExceptionHierarchy:
         """The index error is deliberately not named IndexError (a builtin)."""
         assert SecondaryIndexError is not IndexError
         assert not issubclass(SecondaryIndexError, IndexError)
+
+    def test_invalid_argument_is_also_a_builtin_value_error(self):
+        """A refused argument is caught by either family's handler."""
+        assert issubclass(InvalidArgumentError, AerospikeError)
+        assert issubclass(InvalidArgumentError, ValueError)
 
     def test_not_cross_linked(self):
         """Typed siblings should not be subclasses of each other."""
@@ -293,6 +300,32 @@ class TestResultCodeToException:
         assert type(exc) is AerospikeError
         assert exc.result_code == ResultCode.PARAMETER_ERROR
 
+    def test_client_refused_argument_is_typed(self):
+        exc = _result_code_to_exception(
+            ResultCode.PARAMETER_ERROR, "top_k must be in [1, 1000]; got 0",
+            from_server=False,
+        )
+        assert type(exc) is InvalidArgumentError
+        assert exc.result_code == ResultCode.PARAMETER_ERROR
+        # Nothing was sent, so there is no server explanation to point at.
+        assert exc.hint is None
+
+    def test_invalid_argument_code_is_typed(self):
+        exc = _result_code_to_exception(
+            ResultCode.INVALID_ARGUMENT, "top_k must be in [1, 1000]; got 0",
+            from_server=False,
+        )
+        assert type(exc) is InvalidArgumentError
+        assert exc.result_code == -28
+        assert exc.base_message == "Invalid argument"
+        assert exc.hint is None
+
+    def test_other_client_codes_keep_their_types(self):
+        exc = _result_code_to_exception(
+            ResultCode.TXN_FAILED, "abort refused", from_server=False,
+        )
+        assert type(exc) is TransactionError
+
     def test_in_doubt_propagated(self):
         exc = _result_code_to_exception(ResultCode.GENERATION_ERROR, "gen", in_doubt=True)
         assert exc.in_doubt is True
@@ -395,6 +428,37 @@ class TestConvertPncException:
         pfc = _convert_pnc_exception(pnc)
         assert type(pfc) is QueryTerminatedError
         assert pfc.result_code == ResultCode.SCAN_TERMINATED
+
+    def test_pnc_refused_argument_is_typed(self):
+        pnc = PncValueError("Invalid argument: order_by supports at most two keys")
+        pnc.result_code = ResultCode.PARAMETER_ERROR
+        pfc = _convert_pnc_exception(pnc)
+        assert type(pfc) is InvalidArgumentError
+        assert pfc.result_code == ResultCode.PARAMETER_ERROR
+        assert "at most two keys" in str(pfc)
+        assert pfc.hint is None
+
+    def test_refused_argument_takes_the_client_code(self):
+        pnc = PncValueError("Error 4: Invalid argument: order_by supports at most two keys")
+        pnc.result_code = ResultCode.PARAMETER_ERROR
+        pnc.base_message = "Invalid argument: order_by supports at most two keys"
+        exc = _with_invalid_argument_code(_convert_pnc_exception(pnc))
+        assert type(exc) is InvalidArgumentError
+        assert exc.result_code == ResultCode.INVALID_ARGUMENT
+        assert str(exc) == "Error -28: Invalid argument: order_by supports at most two keys"
+        assert exc.base_message == "Invalid argument: order_by supports at most two keys"
+
+    def test_only_a_refused_argument_is_renumbered(self):
+        server = _convert_pnc_exception(PncServerError("bad flags", ResultCode.PARAMETER_ERROR))
+        assert _with_invalid_argument_code(server) is server
+        assert server.result_code == ResultCode.PARAMETER_ERROR
+        timeout = _convert_pnc_exception(PncTimeoutError("timed out"))
+        assert _with_invalid_argument_code(timeout) is timeout
+
+    def test_pnc_refused_argument_without_a_code_stays_generic(self):
+        pfc = _convert_pnc_exception(PncValueError("unknown replica policy"))
+        assert type(pfc) is AerospikeError
+        assert pfc.result_code == ResultCode.CLIENT_ERROR
 
     def test_unknown_exception_wrapped(self):
         pfc = _convert_pnc_exception(RuntimeError("wat"))
@@ -636,7 +700,7 @@ class TestResultCodeGuidance:
         pnc = PncValueError("Error 4: Invalid argument: vector must have at least 1 dimension")
         pnc.result_code = ResultCode.PARAMETER_ERROR
         exc = _convert_pnc_exception(pnc)
-        assert type(exc) is AerospikeError
+        assert type(exc) is InvalidArgumentError
         assert exc.result_code == ResultCode.PARAMETER_ERROR
         assert exc.hint is None
         assert str(exc) == "Error 4: Invalid argument: vector must have at least 1 dimension"

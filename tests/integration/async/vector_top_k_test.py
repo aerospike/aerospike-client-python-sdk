@@ -29,7 +29,7 @@ from aerospike_sdk import (
     VectorDistanceMetric,
     VectorElementType,
 )
-from aerospike_sdk.exceptions import AerospikeError
+from aerospike_sdk.exceptions import InvalidArgumentError
 from tests.integration.namespace import general_namespace
 from tests.pnc_compat import requires_query_selection, requires_query_top_k, requires_vector
 
@@ -239,13 +239,14 @@ class TestTopK:
     async def test_key_the_projection_does_not_return_is_refused(
         self, session, project, missing,
     ):
-        with pytest.raises(AerospikeError) as exc_info:
+        with pytest.raises(InvalidArgumentError) as exc_info:
             await project(session.query(_DS)).top_k(3).execute()
-        assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+        assert exc_info.value.result_code == ResultCode.INVALID_ARGUMENT
+        assert str(exc_info.value).startswith("Error -28: ")
         assert f"'{missing}'" in str(exc_info.value)
 
     async def test_two_keys_on_one_bin_are_refused(self, session):
-        with pytest.raises(AerospikeError) as exc_info:
+        with pytest.raises(InvalidArgumentError) as exc_info:
             await (
                 session.query(_DS)
                 .order_by("price", BinDataType.DOUBLE, Order.ASC)
@@ -253,5 +254,5 @@ class TestTopK:
                 .top_k(3)
                 .execute()
             )
-        assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
+        assert exc_info.value.result_code == ResultCode.INVALID_ARGUMENT
         assert "different bins" in str(exc_info.value)

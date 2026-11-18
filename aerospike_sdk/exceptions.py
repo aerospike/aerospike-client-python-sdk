@@ -232,6 +232,44 @@ class InvalidNamespaceError(AerospikeError):
 
 
 # ---------------------------------------------------------------------------
+# Argument validation
+# ---------------------------------------------------------------------------
+
+class InvalidArgumentError(AerospikeError, ValueError):
+    """Raised when a check the client makes before sending an operation fails.
+
+    The server never saw the request, so the failure is never in doubt. When
+    the server is the one that rejects an argument, a plain
+    :class:`AerospikeError` carries ``ResultCode.PARAMETER_ERROR``.
+
+    This type covers the refusals that carry a result code. Other argument
+    checks raise a plain built-in :exc:`ValueError` or :exc:`TypeError`. It is
+    also a :exc:`ValueError`, so an existing ``except ValueError`` handler
+    catches it.
+
+    Attributes:
+        result_code: ``ResultCode.INVALID_ARGUMENT`` (``-28``) for any refusal
+            of a Top-K query. ``ResultCode.PARAMETER_ERROR`` for refusals of
+            other operations, the code existing handlers match on.
+
+    Example::
+
+        try:
+            query = (
+                session.query(products)
+                .order_by("price", BinDataType.DOUBLE, Order.ASC)
+                .top_k(5000)
+            )
+        except InvalidArgumentError:
+            ...  # k is outside 1 to 1000; fix the call, do not retry
+
+    See Also:
+        :class:`AerospikeError`: Carries ``ResultCode.PARAMETER_ERROR`` when
+            the server rejects an argument.
+    """
+
+
+# ---------------------------------------------------------------------------
 # Security
 # ---------------------------------------------------------------------------
 
@@ -674,13 +712,17 @@ class CommitError(TransactionError):
 # ---------------------------------------------------------------------------
 
 # Codes without a meaningfully distinct handling story (for example
-# INVALID_GEOJSON, PARAMETER_ERROR) fall through to AerospikeError. Client-side
-# failures with their own exception type (timeouts, connection loss) convert
-# by that type before this map is consulted; the client codes listed here are
-# the ones that arrive on the generic client error.
+# INVALID_GEOJSON, a server-reported PARAMETER_ERROR) fall through to
+# AerospikeError. Client-side failures with their own exception type (timeouts,
+# connection loss) convert by that type before this map is consulted; the
+# client codes listed here are the ones that arrive on the generic client
+# error. PARAMETER_ERROR is shared by both origins, so the factory below picks
+# its type from the origin and this map does not list it; INVALID_ARGUMENT is
+# the client's alone.
 
 _RC_TO_TYPE: dict[ResultCode, type[AerospikeError]] = {
     # Client-assigned codes
+    ResultCode.INVALID_ARGUMENT: InvalidArgumentError,
     ResultCode.TXN_FAILED: TransactionError,
     ResultCode.TXN_ALREADY_ABORTED: TransactionError,
     ResultCode.TXN_ALREADY_COMMITTED: TransactionError,
@@ -880,7 +922,11 @@ def _result_code_to_exception(
     per-code guidance describes server-side conditions, so a client-side
     failure carries only an explicit ``hint``.
     """
-    cls = _RC_TO_TYPE.get(result_code, AerospikeError)
+    # The server and the client share this code, so the origin picks the type.
+    if result_code == ResultCode.PARAMETER_ERROR and not from_server:
+        cls: type[AerospikeError] = InvalidArgumentError
+    else:
+        cls = _RC_TO_TYPE.get(result_code, AerospikeError)
     # A row-level failure arrives as a bare code; the code's descriptive string
     # is then both the message and the base message, as it is for a server
     # failure that reaches this layer already rendered.
@@ -919,6 +965,36 @@ def _result_code_to_exception(
         sub_exceptions=sub_exceptions,
         base_message=base_message,
         hint=guidance,
+    )
+
+
+def _with_invalid_argument_code(exc: AerospikeError) -> AerospikeError:
+    """Give a client-refused argument the client's own ``INVALID_ARGUMENT`` code.
+
+    PNC reports every argument it refuses with ``PARAMETER_ERROR``, the code
+    the server uses as well. A caller that knows the refusal belongs to an
+    operation whose checks carry the client's code passes the converted
+    exception through here; anything else comes back untouched.
+    """
+    if (
+        type(exc) is not InvalidArgumentError
+        or exc.result_code != ResultCode.PARAMETER_ERROR
+    ):
+        return exc
+    message = str(exc)
+    # PNC renders the code into the message, so it has to change with it.
+    rendered = f"Error {int(ResultCode.PARAMETER_ERROR)}: "
+    if message.startswith(rendered):
+        message = f"Error {int(ResultCode.INVALID_ARGUMENT)}: {message[len(rendered):]}"
+    return InvalidArgumentError(
+        message,
+        result_code=ResultCode.INVALID_ARGUMENT,
+        in_doubt=exc.in_doubt,
+        node=exc.node,
+        iteration=exc.iteration,
+        sub_exceptions=exc.sub_exceptions,
+        base_message=exc.base_message,
+        hint=exc.hint,
     )
 
 
@@ -1043,3 +1119,8 @@ def _convert_pnc_exception(exc: Exception, *, hint: str | None = None) -> Aerosp
         )
 
     return AerospikeError(str(exc))
+
+
+def _convert_ranked_query_error(exc: Exception) -> AerospikeError:
+    """Convert a Top-K query's failure, giving a client refusal ``INVALID_ARGUMENT``."""
+    return _with_invalid_argument_code(_convert_pnc_exception(exc))

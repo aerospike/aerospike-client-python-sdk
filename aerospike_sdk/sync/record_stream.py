@@ -152,18 +152,24 @@ class RecordStream:
         return inst
 
     @classmethod
-    def _from_pnc_recordset(cls, recordset: Any) -> "RecordStream":
+    def _from_pnc_recordset(
+        cls,
+        recordset: Any,
+        convert_error: Callable[[Exception], AerospikeError] = _convert_pnc_exception,
+    ) -> "RecordStream":
         """Wrap a PNC ``Recordset`` (sync ``__iter__`` / ``__next__``) — internal plumbing.
 
         Each yielded ``Record`` becomes an OK :class:`RecordResult` with
-        ``index=-1`` (queries have no positional index).
+        ``index=-1`` (queries have no positional index). A failure mid-stream
+        is converted by *convert_error*, so it reports the code the query's
+        own refusals do.
         """
         def _gen() -> Iterator[RecordResult]:
             try:
                 for record in recordset:
                     yield _ok_result(record)
             except Exception as e:
-                raise _convert_pnc_exception(e) from e
+                raise convert_error(e) from e
             finally:
                 recordset.close()
         inst = cls(_gen())

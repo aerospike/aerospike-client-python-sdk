@@ -72,10 +72,15 @@ class _RecordsetRows:
     resuming a generator frame. Only a refill runs a coroutine.
     """
 
-    __slots__ = ("_recordset", "_pending", "_refilling", "_closed")
+    __slots__ = ("_recordset", "_convert_error", "_pending", "_refilling", "_closed")
 
-    def __init__(self, recordset: Any) -> None:
+    def __init__(
+        self,
+        recordset: Any,
+        convert_error: Callable[[Exception], AerospikeError] = _convert_pnc_exception,
+    ) -> None:
         self._recordset = recordset
+        self._convert_error = convert_error
         self._pending: Any = iter(())
         self._refilling = False
         self._closed = False
@@ -101,7 +106,7 @@ class _RecordsetRows:
             batch = await recordset._next_batch(_RECORDSET_BATCH)
         except Exception as e:
             recordset.close()
-            raise _convert_pnc_exception(e) from e
+            raise self._convert_error(e) from e
         except BaseException:
             # Cancelled mid-wait: the consumer is gone, so stop the query.
             recordset.close()
@@ -267,11 +272,17 @@ class RecordStream:
         return inst
 
     @classmethod
-    def _from_pnc_recordset(cls, recordset) -> RecordStream:
+    def _from_pnc_recordset(
+        cls,
+        recordset: Any,
+        convert_error: Callable[[Exception], AerospikeError] = _convert_pnc_exception,
+    ) -> RecordStream:
         """Wrap a PNC ``Recordset`` (async iterable of ``Record``) — internal plumbing.
 
         Each yielded ``Record`` is converted to a :class:`RecordResult` with
         ``result_code=OK`` and ``index=-1`` (queries have no positional index).
+        A failure mid-stream is converted by *convert_error*, so it reports
+        the code the query's own refusals do.
 
         Records are pulled in batches, which spares an await per record. PNC
         counts a whole batch as read the moment it hands it over, so this
@@ -279,7 +290,7 @@ class RecordStream:
         back; the chunked adapter, which resumes from that cursor, pulls one
         record at a time.
         """
-        rows = _RecordsetRows(recordset)
+        rows = _RecordsetRows(recordset, convert_error)
         inst = cls(rows)
         inst._closeable = rows
         return inst

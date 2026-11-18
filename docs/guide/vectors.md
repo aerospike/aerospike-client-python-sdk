@@ -157,9 +157,10 @@ The rules for order keys:
 - Calling `order_by` again replaces every key set before.
 
 `k` runs from 1 to 1000. Because `k` is the whole result's size, a Top-K
-query refuses `limit()`, `chunk_size()`, and `with_no_bins()` with
-`ResultCode.PARAMETER_ERROR`, and so does a key query or a cluster with a
-node that cannot rank. The sync builder has the same methods.
+query refuses `limit()`, `chunk_size()`, and `with_no_bins()` with an
+`InvalidArgumentError` (`ResultCode.INVALID_ARGUMENT`), and so does a key query
+or a cluster with a node that cannot rank, including one that joins while the
+query streams. The sync builder has the same methods.
 
 ### Timeouts on Large Sets
 

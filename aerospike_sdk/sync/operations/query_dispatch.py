@@ -755,7 +755,7 @@ class _BlockingQueryDispatch:
                 use_server_query_selection=use_server_query_selection,
             )
         except Exception as e:
-            raise _convert_pnc_exception(e) from e
+            raise self._query_error_converter()(e) from e
 
         if self._chunk_size is not None and self._chunk_size > 0:
             client = self._client
