@@ -15,3 +15,11 @@ discovery/translate/collision.yaml:
   pass-through-same-advertised-endpoint: *no-collision-hook
   shared-host-distinct-ports: *no-collision-hook
   three-peers-one-endpoint: *no-collision-hook
+
+discovery/merge/merge-policy.yaml:
+  replace-empty-refresh-publishes-empty: &empty-refresh-kept
+    result: fail
+    reason: >-
+      CLIENT-5975: the core keeps the previous seed list when a refresh
+      merges to an empty one, where the fixture publishes the empty list.
+  replace-empty-at-init-keeps-static: *empty-refresh-kept

@@ -33,9 +33,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: aerospike/aerospike-client-conformance
-          # main at VERSION 1.1.0, the version conformance_test.py pins;
-          # repin to the v1.1.0 tag once the fixture set is tagged.
-          ref: 575501469e053042b6fe0ae656920160226bda84
+          # The fixture set is not versioned: pin a commit, and move it in
+          # a change that also updates tests/conformance/python-declared.yaml.
+          ref: a30c0787dede434f15be3622e7007dc57b55209d # main
           path: conformance
 
       - name: Setup Python

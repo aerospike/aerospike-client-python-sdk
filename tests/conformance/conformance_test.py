@@ -28,8 +28,9 @@ it; a row with no declaration is declared ``pass`` (``blocked`` when the
 fixture blocks it). The run writes ``conformance-report.json`` in the shape
 of the fixture set's report schema.
 
-``CONFORMANCE_DIR`` points at a checkout of the fixture set at the version
-``FIXTURE_SET_VERSION`` names; without it every row is skipped.
+``CONFORMANCE_DIR`` points at a checkout of the fixture set at the commit
+``python-declared.yaml`` was written against, the one the conformance
+workflow pins; without it every row is skipped.
 ``CONFORMANCE_REPORT`` overrides the report path,
 ``build/conformance/conformance-report.json`` by default::
 
@@ -64,7 +65,6 @@ from aerospike_sdk.loggers import SdkLoggers
 from aerospike_sdk.policy.sdk_config_loader import ENV_VAR, load_at_connect
 
 RUNTIME = "python"
-FIXTURE_SET_VERSION = "1.1.0"
 FIXTURE_ROOTS = ("discovery", "tls")
 FIXTURE_KINDS = ("translate", "collision", "merge", "dns", "aws-tags", "tls")
 DECLARED = Path(__file__).with_name("python-declared.yaml")
@@ -125,13 +125,12 @@ class Report:
             entry["detail"] = actual.reason
         self.rows.append(entry)
 
-    def write(self, fixture_set_version: str) -> Path:
+    def write(self) -> Path:
         rows = sorted(self.rows, key=lambda r: f"{r['file']}:{r['case']}")
         counts = {result: sum(r["result"] == result for r in rows) for result in RESULTS}
         report = {
             "runtime": RUNTIME,
             "clientVersion": aerospike_sdk.__version__,
-            "fixtureSetVersion": fixture_set_version,
             "counts": counts,
             "rows": rows,
         }
@@ -147,20 +146,14 @@ class Report:
 
 
 def fixture_dir() -> Optional[Path]:
-    """The fixture set checkout, checked against the pinned version."""
+    """The fixture set checkout ``CONFORMANCE_DIR`` names."""
     raw = os.environ.get("CONFORMANCE_DIR")
     if not raw:
         return None
     root = Path(raw).resolve()
-    version_file = root / "VERSION"
-    if not version_file.is_file():
-        raise RuntimeError(f"Not a conformance fixture set, VERSION not found: {root}")
-    version = version_file.read_text().strip()
-    if version != FIXTURE_SET_VERSION:
-        raise RuntimeError(
-            f"Conformance fixture set {version} found, {FIXTURE_SET_VERSION} expected: "
-            "check out that release or update the declarations"
-        )
+    missing = [base for base in FIXTURE_ROOTS if not (root / base).is_dir()]
+    if missing:
+        raise RuntimeError(f"Not a conformance fixture set, no {missing[0]} directory: {root}")
     return root
 
 
@@ -219,8 +212,8 @@ ROWS = load_rows(FIXTURES) if FIXTURES else []
 
 pytestmark = pytest.mark.skipif(
     FIXTURES is None,
-    reason=f"CONFORMANCE_DIR is not set; check out aerospike-client-conformance "
-    f"v{FIXTURE_SET_VERSION} and point CONFORMANCE_DIR at it",
+    reason="CONFORMANCE_DIR is not set; check out aerospike-client-conformance at the "
+    "commit the conformance workflow pins and point CONFORMANCE_DIR at it",
 )
 
 
@@ -229,7 +222,7 @@ def report():
     collected = Report()
     yield collected
     if collected.rows:
-        path = collected.write(FIXTURE_SET_VERSION)
+        path = collected.write()
         print(f"\nCONFORMANCE report {path}")
 
 
