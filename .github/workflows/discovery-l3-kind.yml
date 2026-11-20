@@ -1,0 +1,38 @@
+name: Discovery L3 kind
+
+# L3: the default profile of l3-kind in aerospike-client-conformance, run
+# against this commit through the driver in tests/l5_aws. The harness builds a
+# kind cluster with the Aerospike Kubernetes Operator and decides every row.
+# The harness names its results artifact after the run alone, so each further
+# profile needs a workflow of its own. The job needs the Enterprise feature
+# key, so it does not run on fork pull requests.
+
+on:
+  pull_request:
+    branches:
+      - stage
+      - main
+      - pluggable_discovery
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  l3-kind:
+    name: L3 kind (default)
+    if: >-
+      ${{
+        github.event_name != 'pull_request'
+        || github.event.pull_request.head.repo.full_name == github.repository
+      }}
+    uses: aerospike/aerospike-client-conformance/.github/workflows/l3-kind.yaml@a30c0787dede434f15be3622e7007dc57b55209d # main
+    with:
+      client-repository: ${{ github.repository }}
+      commit: ${{ github.event.pull_request.head.sha || github.sha }}
+      manifest: tests/l5_aws/l5-aws.manifest
+      profile: default
+      ako-version: 4.7.0
+      conformance-ref: a30c0787dede434f15be3622e7007dc57b55209d
+    secrets:
+      FEATURES_CONF: ${{ secrets.AEROSPIKE_SERVER_FEATURES_CONF }}

@@ -1,0 +1,51 @@
+name: Discovery L2 proxy
+
+# L2: the l2-proxy profiles of aerospike-client-conformance, run against this
+# commit through the driver in tests/l5_aws. The harness builds a three node
+# cluster behind Toxiproxy, injects the faults and decides every row; the
+# manifest and the driver are the ones the L5 harness uses. Community runs
+# every profile. Enterprise adds server TLS (default and cn-only) and needs the
+# feature key, which fork pull requests do not get.
+
+on:
+  pull_request:
+    branches:
+      - stage
+      - main
+      - pluggable_discovery
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # The harness workflow requests it for its optional registry login.
+  id-token: write
+
+jobs:
+  l2-proxy:
+    name: L2 proxy
+    uses: aerospike/aerospike-client-conformance/.github/workflows/l2-proxy.yaml@a30c0787dede434f15be3622e7007dc57b55209d # main
+    with:
+      client-repository: ${{ github.repository }}
+      commit: ${{ github.event.pull_request.head.sha || github.sha }}
+      manifest: tests/l5_aws/l5-aws.manifest
+      profile: all
+      edition: ce
+      conformance-ref: a30c0787dede434f15be3622e7007dc57b55209d
+
+  l2-proxy-ee:
+    name: L2 proxy (ee)
+    if: >-
+      ${{
+        github.event_name != 'pull_request'
+        || github.event.pull_request.head.repo.full_name == github.repository
+      }}
+    uses: aerospike/aerospike-client-conformance/.github/workflows/l2-proxy.yaml@a30c0787dede434f15be3622e7007dc57b55209d # main
+    with:
+      client-repository: ${{ github.repository }}
+      commit: ${{ github.event.pull_request.head.sha || github.sha }}
+      manifest: tests/l5_aws/l5-aws.manifest
+      profile: default,cn-only
+      edition: ee
+      conformance-ref: a30c0787dede434f15be3622e7007dc57b55209d
+    secrets:
+      FEATURES_CONF: ${{ secrets.AEROSPIKE_SERVER_FEATURES_CONF }}

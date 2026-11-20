@@ -16,8 +16,9 @@ guide and a test disagree, trust the test and report the guide.
   configuration surface; skipped unless `CONFORMANCE_DIR` points at a checkout
   of the fixture set. Expected results per row live in `python-declared.yaml`.
 - `tests/l5_aws/` — not a pytest suite. The driver and manifest the
-  `l5-aws` harness in `aerospike-client-conformance` runs on AWS; its pure
-  parts are covered by `tests/unit/l5_driver_test.py`.
+  harnesses in `aerospike-client-conformance` run: `l5-aws` on AWS, and in CI
+  `l2-proxy` (`discovery-l2-proxy.yml`) and `l3-kind` (`discovery-l3-kind.yml`).
+  Its pure parts are covered by `tests/unit/l5_driver_test.py`.
 
 Run `make test-unit`, `make test-int`, or `make test` for everything.
 `make coverage` reports unit-only line coverage (the figure CI enforces);
