@@ -135,6 +135,33 @@ address the translator has no mapping for: `PASS_THROUGH` (the default)
 connects to it as advertised, `STRICT` skips that node. Calling
 `with_address_translation(on_miss=...)` without a translator keeps `ip_map()`.
 
+## DNS lookups
+
+The client resolves seed, peer and node hostnames with the system resolver,
+so `/etc/hosts` and the `resolv.conf` search list apply. It puts no time limit
+of its own on a lookup: a slow resolver holds up the cluster tend, or
+`connect()` while it seeds, for as long as the system is configured to wait.
+The tend and connection timeouts cover connecting to an address, not finding
+it.
+
+Bound lookups in the resolver configuration:
+
+- On a host, set `options timeout:` (seconds per attempt) and `attempts:` in
+  `/etc/resolv.conf`, for example `options timeout:1 attempts:2`.
+- On Kubernetes, set the same options in the pod's `dnsConfig`:
+
+```yaml
+dnsConfig:
+  options:
+    - name: timeout
+      value: "1"
+    - name: attempts
+      value: "2"
+```
+
+`DnsSeedCandidateProvider` is a separate path: it sends its own queries and
+bounds them with its `timeout`.
+
 ## In the SDK config file
 
 Both settings have a block in each `system:` profile. The keys use
