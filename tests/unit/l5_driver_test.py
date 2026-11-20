@@ -53,6 +53,32 @@ class TestFlags:
             "--timeout", "1000", "--namespace", "test", "--set", "l5",
         ])
         assert (options.on_miss, options.workers, options.keys) == ("strict", 4, 1000)
+        assert (options.tls_name, options.tls_ca_file) == (None, None)
+        assert driver.flag_problem(options) is None
+
+    def test_tls_ca_file_needs_a_tls_name_and_a_readable_file(self, tmp_path):
+        base = ["--seed", "db:4333", "--shape", "pass-through", "--tend-interval", "250",
+                "--timeout", "1000", "--namespace", "test", "--set", "l5"]
+        ca = tmp_path / "ca.pem"
+        ca.write_text("-----BEGIN CERTIFICATE-----\n")
+
+        alone = driver.parse_args(base + ["--tls-ca-file", str(ca)])
+        assert driver.flag_problem(alone) == "--tls-ca-file only applies with --tls-name"
+
+        missing = driver.parse_args(
+            base + ["--tls-name", "db1", "--tls-ca-file", str(tmp_path / "absent.pem")])
+        assert driver.flag_problem(missing).startswith("--tls-ca-file is not readable")
+
+        both = driver.parse_args(base + ["--tls-name", "db1", "--tls-ca-file", str(ca)])
+        assert driver.flag_problem(both) is None
+        assert driver.flag_problem(driver.parse_args(base + ["--tls-name", "db1"])) is None
+
+    def test_port_map_needs_the_port_map_shape(self):
+        options = driver.parse_args([
+            "--seed", "db:3000", "--shape", "pass-through", "--port-map", "1A0=db:30001",
+            "--tend-interval", "250", "--timeout", "1000", "--namespace", "test", "--set", "l5",
+        ])
+        assert driver.flag_problem(options) == "--port-map only applies to --shape port-map"
 
 
 class TestServeKeys:

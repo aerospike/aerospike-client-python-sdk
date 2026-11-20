@@ -437,6 +437,10 @@ class Driver:
         cd = ClusterDefinition(host, port)
         if o.user:
             cd = cd.with_native_credentials(o.user, os.environ.get("AEROSPIKE_ADMIN_PASSWORD", ""))
+        if o.tls_name:
+            # Every node's certificate is checked against this name, never the
+            # host dialed; pass-through then reads the TLS alternate peer list.
+            cd = cd.with_tls_config(tls_name=o.tls_name, ca_file=o.tls_ca_file)
         on_miss = TranslationMissMode.STRICT if o.on_miss == "strict" else TranslationMissMode.PASS_THROUGH
         if o.shape == "pass-through":
             cd = cd.using_services_alternate().with_address_translation(
@@ -719,13 +723,27 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--set", required=True)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--keys", type=int, default=1000)
+    parser.add_argument("--tls-name")
+    parser.add_argument("--tls-ca-file")
     return parser.parse_args(argv)
+
+
+def flag_problem(options: argparse.Namespace) -> Optional[str]:
+    """Why these flags cannot be used together, or ``None`` when they can."""
+    if options.port_map and options.shape != "port-map":
+        return "--port-map only applies to --shape port-map"
+    if options.tls_ca_file and not options.tls_name:
+        return "--tls-ca-file only applies with --tls-name"
+    if options.tls_ca_file and not os.access(options.tls_ca_file, os.R_OK):
+        return f"--tls-ca-file is not readable: {options.tls_ca_file}"
+    return None
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     options = parse_args(argv)
-    if options.port_map and options.shape != "port-map":
-        print("--port-map only applies to --shape port-map", file=sys.stderr)
+    problem = flag_problem(options)
+    if problem:
+        print(problem, file=sys.stderr)
         return 2
     return asyncio.run(Driver(options).run())
 
