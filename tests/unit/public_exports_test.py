@@ -84,7 +84,7 @@ def test_every_type_the_exported_classes_take_is_exported():
     a renamed re-export counts.
     """
     # Older PNC stubs qualify their own types with a ``_native.`` prefix.
-    stub = Path(aerospike_native.__file__).with_name("_native.pyi").read_text()
+    stub = Path(aerospike_native.__file__).with_name("_native.pyi").read_text(encoding="utf-8")
     stub = re.sub(r"(?<![\w.])_native\.", "", stub)
     classes = _pnc_classes()
     exported = {id(value) for value in vars(aerospike_sdk).values()}

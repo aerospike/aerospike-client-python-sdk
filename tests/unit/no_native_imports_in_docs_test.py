@@ -38,7 +38,7 @@ def test_docs_and_examples_do_not_import_the_native_package():
     hits = [
         f"{path.relative_to(ROOT)}:{number}: {line.strip()}"
         for path in _files()
-        for number, line in enumerate(path.read_text().splitlines(), start=1)
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
         if NATIVE_IMPORT.match(line)
     ]
     assert not hits, "import from aerospike_sdk instead:\n" + "\n".join(hits)
