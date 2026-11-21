@@ -300,18 +300,21 @@ class TestDiscoveryBlock:
     def test_unknown_keys_are_drops(self):
         text = (
             "system:\n  DEFAULT:\n    discovery:\n      refresh_ms: 10\n"
-            "      provider: dns\n      dns: {names: [x.example.com], ttl: 5}\n"
+            "      provider: dns\n"
+            f"      dns: {{names: [x.example.com], servers: {_DNS_SERVERS}, ttl: 5}}\n"
         )
         with _collect_drops() as dropped:
             discovery = _profile(text).discovery
         assert sorted(dropped) == [
             "key DEFAULT.discovery.dns.ttl", "key DEFAULT.discovery.refresh_ms",
         ]
-        assert discovery.provider == FileSeedProvider("dns", {"names": ["x.example.com"]})
+        assert discovery.provider == FileSeedProvider(
+            "dns", {"names": ["x.example.com"], "servers": _DNS_SERVERS},
+        )
 
     def test_a_mode_the_file_provider_does_not_run_in_is_skipped(self, caplog):
         text = "system:\n  DEFAULT:\n    discovery:\n      execution_mode: thread\n" + (
-            "      provider: dns\n      dns: {names: [x.example.com]}\n"
+            f"      provider: dns\n      dns: {{names: [x.example.com], servers: {_DNS_SERVERS}}}\n"
         )
         with caplog.at_level(logging.WARNING):
             discovery = _profile(text).discovery
