@@ -13,7 +13,7 @@ authors = [{ name = "Aerospike, Inc.", email = "info@aerospike.com" }]
 keywords = ["aerospike", "database", "nosql", "client", "async"]
 requires-python = ">=3.11"
 dependencies = [
-    "aerospike-native==1.0.1.dev145",
+    "aerospike-native==1.0.1.dev146",
     "typing_extensions>=4.0.0",
     "pyyaml>=6.0",
 ]

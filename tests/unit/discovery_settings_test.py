@@ -20,7 +20,6 @@ import os
 from datetime import timedelta
 
 import pytest
-from aerospike_native import Host as PncHost
 
 from aerospike_sdk import (
     AerospikeError,
@@ -30,6 +29,7 @@ from aerospike_sdk import (
     DiscoveryExecutionMode,
     DnsRecordType,
     DnsSeedCandidateProvider,
+    Host,
     PassThroughAddressTranslator,
     PortMapAddressTranslator,
     ResultCode,
@@ -50,9 +50,14 @@ from aerospike_sdk.policy.sdk_config_loader import (
 from aerospike_sdk.sdk_config_monitor import SdkConfigSource, _SdkConfigPoller
 
 
+# Explicit servers keep the DNS provider from reading the host's resolver
+# configuration, which not every platform has.
+_DNS_SERVERS = ["10.0.0.53:53"]
+
+
 class RegistryProvider(SeedCandidateProvider):
     def refresh_seed_candidates(self, ctx):
-        return ["10.0.0.1:3000"]
+        return [Host("10.0.0.1", 3000)]
 
 
 def _profile(text: str):
@@ -69,7 +74,7 @@ class TestWithSeedDiscovery:
     """The builder carries every setting onto the client policy."""
 
     def test_every_setting_reaches_the_policy(self):
-        provider = DnsSeedCandidateProvider(["seeds.example.com"])
+        provider = DnsSeedCandidateProvider(["seeds.example.com"], servers=_DNS_SERVERS)
         cd = ClusterDefinition("localhost", 3000).with_seed_discovery(
             provider,
             merge_policy=SeedMergePolicy.DISCOVERY_ONLY,
@@ -94,7 +99,10 @@ class TestWithSeedDiscovery:
 
     @pytest.mark.parametrize("provider, mode", [
         (RegistryProvider(), DiscoveryExecutionMode.TEND),
-        (DnsSeedCandidateProvider(["seeds.example.com"]), DiscoveryExecutionMode.THREAD),
+        (
+            DnsSeedCandidateProvider(["seeds.example.com"], servers=_DNS_SERVERS),
+            DiscoveryExecutionMode.THREAD,
+        ),
         (
             AwsEc2TagSeedCandidateProvider("us-west-2", {"tag:role": ["aerospike"]}),
             DiscoveryExecutionMode.THREAD,
@@ -108,7 +116,7 @@ class TestWithSeedDiscovery:
         assert exc_info.value.result_code == ResultCode.PARAMETER_ERROR
 
     def test_static_provider_takes_either_mode(self):
-        provider = StaticSeedCandidateProvider([PncHost("10.0.0.1", 3000)])
+        provider = StaticSeedCandidateProvider([Host("10.0.0.1", 3000)])
         for mode in DiscoveryExecutionMode:
             ClusterDefinition("localhost", 3000).with_seed_discovery(
                 provider, execution_mode=mode,

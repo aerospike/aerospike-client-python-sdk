@@ -19,11 +19,11 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
-from aerospike_native import Host as PncHost
 
 from aerospike_sdk import (
     ClusterDefinition,
     DiscoveryExecutionMode,
+    Host,
     SeedCandidateProvider,
     SeedDiscoveryError,
     SeedMergePolicy,
@@ -34,9 +34,9 @@ from aerospike_sdk import (
 _UNREACHABLE = "127.0.0.1:1"
 
 
-def _seed(aerospike_host: str) -> PncHost:
+def _seed(aerospike_host: str) -> Host:
     name, port = aerospike_host.rsplit(":", 1)
-    return PncHost(name, int(port))
+    return Host(name, int(port))
 
 
 class SeedRegistry(SeedCandidateProvider):

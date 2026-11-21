@@ -75,8 +75,7 @@ the client starts for it, so `refresh_seed_candidates` may block:
 ```python
 from datetime import timedelta
 
-from aerospike_native import Host
-from aerospike_sdk import ClusterDefinition, SeedCandidateProvider
+from aerospike_sdk import ClusterDefinition, Host, SeedCandidateProvider
 
 
 class RegistryProvider(SeedCandidateProvider):
