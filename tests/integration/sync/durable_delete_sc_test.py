@@ -29,7 +29,7 @@ Requires an Enterprise SC cluster on ``AEROSPIKE_HOST_SC`` (or
 from typing import Any
 
 import pytest
-from aerospike_sdk.exceptions import ResultCode
+from aerospike_sdk.exceptions import AerospikeError, ResultCode
 
 from aerospike_sdk import DataSet, ErrorStrategy
 from aerospike_sdk.policy.behavior import Behavior
@@ -165,6 +165,60 @@ class TestDurableDeleteOperate:
         assert row is not None
         assert row.as_bool() is False
 
+    def test_write_that_empties_record_uses_default_durable_delete_on_strong_consistency(
+        self, session_sc, ds_sc, enterprise_sc,
+    ):
+        """Removing the last bin deletes the record; the SC durable default rides on the write."""
+        _skip_if_not_enterprise(enterprise_sc)
+        session = session_sc
+        key = ds_sc.id(10671)
+        _delete_keys_durable(session, [key])
+        session.insert(key).bin("only").set_to(1).execute()
+
+        session.upsert(key).remove_bin("only").execute().first_or_raise()
+
+        row = session.exists(key).include_missing_keys().execute().first()
+        assert row is not None
+        assert row.as_bool() is False
+
+    def test_write_that_empties_record_honors_non_durable_override_on_strong_consistency(
+        self, session_sc, ds_sc, enterprise_sc,
+    ):
+        """``without_durable_delete()`` reaches the wire on a plain write: SC refuses the expunge."""
+        _skip_if_not_enterprise(enterprise_sc)
+        session = session_sc
+        key = ds_sc.id(10672)
+        _delete_keys_durable(session, [key])
+        session.insert(key).bin("only").set_to(1).execute()
+
+        with pytest.raises(AerospikeError) as ei:
+            session.upsert(key).remove_bin("only").without_durable_delete().execute().first_or_raise()
+        assert ei.value.result_code == ResultCode.FAIL_FORBIDDEN
+
+        row = session.exists(key).include_missing_keys().execute().first()
+        assert row is not None
+        assert row.as_bool() is True
+        _delete_keys_durable(session, [key])
+
+    def test_write_that_empties_record_honors_durable_override_on_strong_consistency(
+        self, session_sc, ds_sc, enterprise_sc,
+    ):
+        """``with_durable_delete()`` on a plain write wins over a non-durable SC default."""
+        _skip_if_not_enterprise(enterprise_sc)
+        probe_behavior = Behavior.DEFAULT.derive_with_changes(
+            "sc_non_durable_writes", writes_sc=Settings(durable_delete=False),
+        )
+        session = session_sc._client.create_session(behavior=probe_behavior)
+        key = ds_sc.id(10673)
+        _delete_keys_durable(session_sc, [key])
+        session.insert(key).bin("only").set_to(1).execute()
+
+        session.upsert(key).remove_bin("only").with_durable_delete().execute().first_or_raise()
+
+        row = session.exists(key).include_missing_keys().execute().first()
+        assert row is not None
+        assert row.as_bool() is False
+
 
 class TestDurableDeleteBatchReset:
     def test_batch_delete_durable_delete_resets_records_for_repeat_adds(
@@ -269,3 +323,58 @@ class TestDurableDeleteForbiddenBatch:
             assert rr.as_bool(), f"record should still exist after forbidden delete; index {i}"
 
         _delete_keys_durable(session, keys)
+
+
+class TestDurableDeleteDefaultSession:
+    """A default session on SC sends the durable flag with no opt-in on the chain."""
+
+    def test_default_session_point_delete_on_strong_consistency_without_explicit_durable_opt_in(
+        self, session_sc, ds_sc,
+    ):
+        session = session_sc
+        key = ds_sc.id(10720)
+        _delete_keys_durable(session, [key])
+        session.upsert(key).bin("ddbDef").set_to(1).execute()
+
+        assert session.delete(key).execute().first_or_raise().as_bool()
+
+        row = session.exists(key).include_missing_keys().execute().first()
+        assert row is not None
+        assert row.as_bool() is False
+
+    def test_default_session_batch_delete_on_strong_consistency_without_explicit_durable_opt_in(
+        self, session_sc, ds_sc, enterprise_sc,
+    ):
+        _skip_if_not_enterprise(enterprise_sc)
+        session = session_sc
+        keys = ds_sc.ids(10721, 10725)
+        _delete_keys_durable(session, keys)
+        session.upsert(*keys).bin("ddbDefBatch").set_to(1).execute()
+
+        rows = session.delete(*keys).execute().collect()
+        assert len(rows) == len(keys)
+        for i, rr in enumerate(rows):
+            assert rr.result_code == ResultCode.OK, f"index {i}: {rr.result_code}"
+
+        ex_rows = session.exists(*keys).include_missing_keys().execute().collect()
+        assert len(ex_rows) == len(keys)
+        for i, rr in enumerate(ex_rows):
+            assert rr.as_bool() is False, f"record should be deleted; index {i}"
+
+    def test_default_session_operate_delete_record_on_strong_consistency_without_explicit_durable_opt_in(
+        self, session_sc, ds_sc, enterprise_sc,
+    ):
+        _skip_if_not_enterprise(enterprise_sc)
+        session = session_sc
+        key = ds_sc.id(10726)
+        bin_name = "ddbDefOp"
+        _delete_keys_durable(session, [key])
+        session.upsert(key).bin(bin_name).set_to(1).execute()
+
+        first = session.update(key).bin(bin_name).get().delete_record().execute().first_or_raise()
+        assert first.record is not None
+        assert first.record.bins[bin_name] == 1
+
+        row = session.exists(key).include_missing_keys().execute().first()
+        assert row is not None
+        assert row.as_bool() is False

@@ -568,7 +568,6 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
             )
             and self._dd_command_default is None
             and self._dd_override is None
-            and not self._record_delete_in_fast_ops
             and (self._write_policy is not None or self._write_policy_sc is not None)
         ):
             # Hot path: when both AP + SC base policies are pre-built (the
@@ -601,7 +600,6 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
                     policy=wp_ap,
                     policy_sc=wp_sc,
                     record_exists_action=_OP_TYPE_TO_REA.get(self._op_type_fast),
-                    durable_delete=False,
                     txn=self._txn,
                 )
             except Exception as e:

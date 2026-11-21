@@ -29,7 +29,7 @@ class _FakeVersion:
 
     def __init__(self, major, minor, patch, build=0, *,
                  ael=None, query_ops=None, string_ops=None, query_selection=None,
-                 mrt=None):
+                 vector=None, top_k=None, mrt=None):
         self.major, self.minor, self.patch, self.build = major, minor, patch, build
         # Default each predicate to "supported iff >= 8.2.0", the real floor,
         # unless the test pins it explicitly.
@@ -39,6 +39,9 @@ class _FakeVersion:
                            if query_ops is None else query_ops)
         self._string_ops = ge820 if string_ops is None else string_ops
         self._query_selection = ge820 if query_selection is None else query_selection
+        ge821 = (major, minor, patch) >= (8, 2, 1)
+        self._vector = ge821 if vector is None else vector
+        self._top_k = ge821 if top_k is None else top_k
         self._mrt = major >= 8 if mrt is None else mrt
 
     def supports_server_compiled_ael(self):
@@ -52,6 +55,12 @@ class _FakeVersion:
 
     def supports_query_selection(self):
         return self._query_selection
+
+    def supports_vector(self):
+        return self._vector
+
+    def supports_query_top_k(self):
+        return self._top_k
 
     def supports_mrt(self):
         return self._mrt
@@ -105,11 +114,20 @@ class TestAllNodesFolds:
         vs = [_FakeVersion(8, 2, 0), _FakeVersion(7, 2, 0)]
         assert not capabilities.supports_mrt(vs)
 
+    def test_one_lagging_node_downgrades_vectors_and_top_k(self):
+        vs = [_FakeVersion(8, 2, 1), _FakeVersion(8, 2, 0)]
+        assert not capabilities.supports_vector(vs)
+        assert not capabilities.supports_query_top_k(vs)
+        assert capabilities.supports_vector(vs[:1])
+        assert capabilities.supports_query_top_k(vs[:1])
+
     def test_empty_cluster_supports_nothing(self):
         assert not capabilities.supports_ael([])
         assert not capabilities.supports_query_operations([])
         assert not capabilities.supports_string_operations([])
         assert not capabilities.supports_query_selection([])
+        assert not capabilities.supports_vector([])
+        assert not capabilities.supports_query_top_k([])
         assert not capabilities.supports_mrt([])
 
     def test_predicates_delegate_to_pnc_not_version_floor(self):
@@ -117,9 +135,12 @@ class TestAllNodesFolds:
         # version check: a node reporting the predicate False despite a high
         # version is honored.
         vs = [_FakeVersion(9, 0, 0, ael=False, string_ops=False, query_ops=False,
-                           query_selection=False, mrt=False)]
+                           query_selection=False, vector=False, top_k=False,
+                           mrt=False)]
         assert not capabilities.supports_ael(vs)
         assert not capabilities.supports_string_operations(vs)
         assert not capabilities.supports_query_operations(vs)
         assert not capabilities.supports_query_selection(vs)
+        assert not capabilities.supports_vector(vs)
+        assert not capabilities.supports_query_top_k(vs)
         assert not capabilities.supports_mrt(vs)

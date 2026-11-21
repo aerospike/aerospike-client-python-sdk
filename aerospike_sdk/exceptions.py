@@ -203,6 +203,50 @@ class ConnectionError(AerospikeError):
     """
 
 
+class SeedDiscoveryError(ConnectionError):
+    """Raised when the seed candidate provider fails and no seed is left.
+
+    Raised by ``connect()`` when the provider fails and the cluster
+    definition has no hosts of its own to fall back to. A failed periodic
+    refresh on a running client keeps the last good seeds and is logged
+    instead.
+
+    Attributes:
+        result_code: ``ResultCode.SEED_DISCOVERY_FAILED``.
+
+    Example::
+
+        try:
+            cluster = await (
+                ClusterDefinition(hosts=[]).with_seed_discovery(provider).connect()
+            )
+        except SeedDiscoveryError:
+            ...  # the provider failed; the message carries its error
+    """
+
+
+class AddressTranslationError(ConnectionError):
+    """Raised when address translation cannot produce a usable node address.
+
+    The translator had no mapping for an advertised address while
+    ``on_miss`` is ``STRICT`` (``ResultCode.TRANSLATION_MISS``), or mapped
+    two nodes to the same address (``ResultCode.TRANSLATION_COLLISION``).
+    The client skips such a node and logs why, so this surfaces only where a
+    caller is handed the failure itself.
+
+    Attributes:
+        result_code: ``ResultCode.TRANSLATION_MISS`` or
+            ``ResultCode.TRANSLATION_COLLISION``.
+
+    Example::
+
+        try:
+            ...
+        except AddressTranslationError as exc:
+            log.error("translator misconfigured: %s", exc)
+    """
+
+
 class InvalidNodeError(AerospikeError):
     """Raised when the chosen node is unknown, wrong role, or not usable.
 
@@ -688,6 +732,9 @@ _RC_TO_TYPE: dict[ResultCode, type[AerospikeError]] = {
     ResultCode.QUERY_TERMINATED: QueryTerminatedError,
     ResultCode.SERIALIZE_ERROR: SerializationError,
     ResultCode.GENERATION_ERROR: GenerationError,
+    ResultCode.SEED_DISCOVERY_FAILED: SeedDiscoveryError,
+    ResultCode.TRANSLATION_MISS: AddressTranslationError,
+    ResultCode.TRANSLATION_COLLISION: AddressTranslationError,
     # Authentication (identity / credential problems)
     ResultCode.NOT_AUTHENTICATED: AuthenticationError,
     ResultCode.INVALID_USER: AuthenticationError,
@@ -867,6 +914,7 @@ def _result_code_to_exception(
     sub_exceptions: tuple[AerospikeError, ...] = (),
     base_message: str | None = None,
     hint: str | None = None,
+    from_server: bool = True,
 ) -> AerospikeError:
     """Map a server result code to the appropriate typed exception.
 
@@ -874,6 +922,10 @@ def _result_code_to_exception(
     guidance is appended to *message* and kept on the exception as ``hint``. Pass
     ``hint`` explicitly to override the generic text with something narrower --
     a caller holding the operation knows more than the code alone conveys.
+
+    Pass ``from_server=False`` for a code the client assigned itself. The
+    per-code guidance describes server-side conditions, so a client-side
+    failure carries only an explicit ``hint``.
     """
     cls = _RC_TO_TYPE.get(result_code, AerospikeError)
     # A row-level failure arrives as a bare code; the code's descriptive string
@@ -883,7 +935,7 @@ def _result_code_to_exception(
         message = result_code.description
     if base_message is None:
         base_message = result_code.description
-    if hint is not None:
+    if hint is not None or not from_server:
         guidance: str | None = hint
     elif sub_code:
         # A subcode names the exact condition, so it beats the per-code text.
@@ -1025,6 +1077,7 @@ def _convert_pnc_exception(exc: Exception, *, hint: str | None = None) -> Aerosp
         if code is not None:
             return _result_code_to_exception(
                 code, str(exc), getattr(exc, "in_doubt", False),
+                hint=hint, from_server=False,
                 **_retry_context_kwargs(exc),
             )
         # A client-side failure that names no condition (a CA file that

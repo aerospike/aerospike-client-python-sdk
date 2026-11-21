@@ -22,6 +22,7 @@ from aerospike_native import Operation, SubCode
 from aerospike_native.exceptions import _RC_TO_CLS
 from aerospike_sdk.operations_shared import _SingleKeyWriteSegmentBase
 from aerospike_sdk.exceptions import (
+    AddressTranslationError,
     AerospikeError,
     AuthenticationError,
     AuthorizationError,
@@ -56,6 +57,7 @@ from aerospike_sdk.exceptions import (
     ResultCode,
     SecondaryIndexError,
     SecurityError,
+    SeedDiscoveryError,
     SerializationError,
     TimeoutError,
     TransactionError,
@@ -72,7 +74,30 @@ from aerospike_sdk.exceptions import (
     PncServerError,
     PncTimeoutError,
     PncUDFBadResponse,
+    PncValueError,
 )
+
+
+class TestReExportedConstructorErrors:
+    """A type the SDK re-exports from its dependency validates in its own
+    constructor, where no SDK call wraps the error. Its rejections must be the
+    built-in ``ValueError`` so callers never meet the dependency's own types."""
+
+    @pytest.mark.parametrize(
+        "build",
+        [
+            lambda: aerospike_sdk.Vector([]),
+            lambda: aerospike_sdk.Vector([1.0, float("nan")]),
+            lambda: aerospike_sdk.Vector([0.0] * 65537),
+            lambda: aerospike_sdk.Vector.from_wire_bytes(b"\x01\x03"),
+        ],
+        ids=["empty", "nan", "oversized", "malformed-bytes"],
+    )
+    def test_vector_rejection_is_a_builtin_value_error(self, build):
+        with pytest.raises(ValueError) as exc_info:
+            build()
+        assert not isinstance(exc_info.value, PncAerospikeError)
+
 
 class TestExceptionHierarchy:
     """Verify the inheritance tree matches the design."""
@@ -508,6 +533,17 @@ class TestSubsystemTypedMappings:
     def test_query_terminated_is_a_query_error(self):
         assert issubclass(QueryTerminatedError, QueryError)
 
+    def test_discovery_and_translation_are_connection_errors(self):
+        expected = {
+            ResultCode.SEED_DISCOVERY_FAILED: SeedDiscoveryError,
+            ResultCode.TRANSLATION_MISS: AddressTranslationError,
+            ResultCode.TRANSLATION_COLLISION: AddressTranslationError,
+        }
+        for code, cls in expected.items():
+            exc = _result_code_to_exception(code)
+            assert type(exc) is cls, code
+            assert isinstance(exc, ConnectionError), code
+
 
 class TestTypedCoverageMatchesDependency:
     """Every result code the dependency types must be typed here too.
@@ -606,6 +642,23 @@ class TestResultCodeGuidance:
         exc = _convert_pnc_exception(pnc)
         assert exc.result_code == ResultCode.PARAMETER_ERROR
         assert "error_detail_verbosity" in exc.hint
+
+    def test_client_side_parameter_error_carries_no_server_hint(self):
+        # The client refused the argument itself; no server holds a reason,
+        # so pointing at the server's verbosity setting would misdirect.
+        pnc = PncValueError("Error 4: Invalid argument: vector must have at least 1 dimension")
+        pnc.result_code = ResultCode.PARAMETER_ERROR
+        exc = _convert_pnc_exception(pnc)
+        assert type(exc) is AerospikeError
+        assert exc.result_code == ResultCode.PARAMETER_ERROR
+        assert exc.hint is None
+        assert str(exc) == "Error 4: Invalid argument: vector must have at least 1 dimension"
+
+    def test_client_side_failure_keeps_an_explicit_hint(self):
+        pnc = PncValueError("Error 4: Invalid argument: bad k")
+        pnc.result_code = ResultCode.PARAMETER_ERROR
+        exc = _convert_pnc_exception(pnc, hint="top_k(k) takes 1 to 1000")
+        assert exc.hint == "top_k(k) takes 1 to 1000"
 
     def test_codes_without_guidance_carry_no_hint(self):
         # Guidance that restates the code name is noise; most codes get none.

@@ -353,6 +353,11 @@ Create and update sketches with the builder API
 (`session.upsert(key).bin("h").hll_init(HllConfig.of(14))`, `.hll_add(...)`);
 the server compiler does not accept `hllInit`.
 
+### Vectors
+
+AEL has no vector distance function. Build it with `Exp.vector_distance(...)`
+and pass the `Exp` to `where()`; see [Vectors and Top-K Queries](vectors.md).
+
 ### Hex and Binary Literals
 
 ```

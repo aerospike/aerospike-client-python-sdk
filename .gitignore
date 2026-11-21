@@ -76,3 +76,4 @@ Thumbs.db
 # Aerospike feature keys are licensed; never commit one.
 features.conf
 **/features.conf
+aerospike.env.bak*

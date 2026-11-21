@@ -141,6 +141,14 @@ regardless of the environment:
 cluster_def = ClusterDefinition("localhost", 3000).using_services_alternate(False)
 ```
 
+### Discovered seeds and translated addresses
+
+To find seed hosts from DNS, AWS EC2 tags or your own code instead of listing
+them, use `with_seed_discovery()`. For a client outside the cluster's network,
+where the addresses nodes advertise are not reachable, use
+`with_address_translation()`, the general form of `ip_map()`. See
+[Seed Discovery and Address Translation](discovery.md).
+
 ### TLS
 
 Server-side TLS with CA certificate verification:

@@ -29,12 +29,13 @@ namespaces are SC). When no SC namespace is reachable each test skips with a cle
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import timedelta
 
 import pytest
 import pytest_asyncio
 
-from aerospike_sdk import Behavior, DataSet, ResultCode, Txn, TxnState, TxnStatus
+from aerospike_sdk import Behavior, DataSet, ResultCode, Txn, TxnState, TxnStatus, UDFLang
 from aerospike_sdk.exceptions import AerospikeError, CommitError, TransactionError
 from aerospike_sdk.policy import Settings
 from aerospike_sdk.policy.system_settings import SystemSettings, TransactionSettings
@@ -49,6 +50,9 @@ from integration.sc_namespace_resolve import (
 
 
 BIN_NAME = "bin"
+RECORD_EXAMPLE_LUA = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), "..", "udf", "record_example.lua"),
+)
 
 
 async def _namespaces_on_cluster_hint(session) -> str:
@@ -95,6 +99,16 @@ async def session(cluster_sc, sc_namespace):
         pin = pinned_namespace_env_hint()
         pytest.skip(f"{status.detail}{ns_hint}{pin} MRT tests require SC.")
     return sess
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
+async def record_udf(cluster_sc):
+    """The ``record_example`` UDF module, registered on the SC cluster."""
+    reg = await cluster_sc.register_udf_from_file(
+        RECORD_EXAMPLE_LUA, "record_example.lua", UDFLang.LUA,
+    )
+    assert await reg.wait_till_complete(sleep_time=0.2, timeout=10.0)
+    return "record_example"
 
 
 @pytest.fixture
@@ -429,6 +443,25 @@ async def test_txn_operate_write_abort(session, mrt_set):
         )
         rec = (await stream.first_or_raise()).record_or_raise()
         assert rec.bins.get("bin2") == "bal1"
+        await tx.abort()
+
+    assert await _fetch_bin(session, key) == "val1"
+
+
+# ---------------------------------------------------------------------------
+# A UDF's write is rolled back by abort.
+# ---------------------------------------------------------------------------
+async def test_txn_udf_write_abort(session, mrt_set, record_udf):
+    key = mrt_set.id("txn_udf_write_abort")
+    await _reset(session, key)
+    await session.upsert(key).put({BIN_NAME: "val1"}).execute()
+
+    async with session.transaction() as tx:
+        stream = await (
+            tx.execute_udf(key).function(record_udf, "writeBin").passing(BIN_NAME, "val2").execute()
+        )
+        assert (await stream.first_or_raise()).is_ok
+        assert await _fetch_bin(tx, key) == "val2"
         await tx.abort()
 
     assert await _fetch_bin(session, key) == "val1"

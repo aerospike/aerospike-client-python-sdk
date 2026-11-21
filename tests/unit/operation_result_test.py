@@ -19,13 +19,13 @@ Each accessor must:
 
 * return the right type for matching values,
 * return the documented default (``0``, ``0.0``, ``False``) for ``None``,
-* propagate ``None`` for string / bytes / list / map (no useful default),
+* propagate ``None`` for string / bytes / list / map / vector (no useful default),
 * raise :class:`TypeError` on type mismatch.
 """
 
 import pytest
 
-from aerospike_sdk import OperationResult
+from aerospike_sdk import OperationResult, Vector
 
 
 class TestNumericAccessors:
@@ -141,6 +141,20 @@ class TestCollectionAccessors:
     def test_get_map_rejects_non_dict(self, bad):
         with pytest.raises(TypeError, match="not dict"):
             OperationResult(bad).get_map()
+
+
+class TestVectorAccessor:
+
+    def test_get_vector_returns_vector(self):
+        v = Vector([0.25, -1.5, 3.0])
+        assert OperationResult(v).get_vector() is v
+
+    def test_get_vector_propagates_none(self):
+        assert OperationResult(None).get_vector() is None
+
+    def test_get_vector_rejects_a_list_of_floats(self):
+        with pytest.raises(TypeError, match="not Vector"):
+            OperationResult([0.25, -1.5, 3.0]).get_vector()
 
 
 class TestRawValueAndDunders:

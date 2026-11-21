@@ -46,13 +46,31 @@ from datetime import timedelta
 from typing import Any, Dict, Iterator, List, Mapping, Optional
 
 import yaml
-from aerospike_native import ReadModeAP, ReadModeSC, Replica
+from aerospike_native import (
+    AwsAddressField,
+    DnsRecordType,
+    ReadModeAP,
+    ReadModeSC,
+    Replica,
+    SeedMergePolicy,
+    TranslationMissMode,
+)
 
+from aerospike_sdk.exceptions import AerospikeError, PncAerospikeError
 from aerospike_sdk.loggers import SdkLoggers
 from aerospike_sdk.metrics.export import MIN_REPORT_SIZE_LIMIT, MetricsExporterType
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_registry import get_behavior
 from aerospike_sdk.policy.behavior_settings import Scope, Settings
+from aerospike_sdk.policy.discovery_settings import (
+    DiscoveryExecutionMode,
+    DiscoverySettings,
+    FileAddressTranslator,
+    FileSeedProvider,
+    TranslationSettings,
+    check_execution_mode,
+    runs_in,
+)
 from aerospike_sdk.policy.system_settings import (
     MetricsSettings,
     SystemSettings,
@@ -190,6 +208,61 @@ _SECTIONS: Dict[str, _KeyMap] = {
     "transactions": _TRANSACTIONS_KEYS,
     "metrics": _METRICS_KEYS,
 }
+
+
+@dataclass(frozen=True)
+class _Spelled:
+    """An enum the file names in lower case: ``discovery_only`` is DISCOVERY_ONLY."""
+
+    enum: type
+    spellings: tuple
+
+
+_MERGE_POLICIES = _Spelled(SeedMergePolicy, ("merge", "replace", "discovery_only"))
+_MISS_MODES = _Spelled(TranslationMissMode, ("pass_through", "strict"))
+_DNS_RECORD_TYPES = _Spelled(DnsRecordType, ("a", "srv"))
+_AWS_ADDRESS_FIELDS = _Spelled(
+    AwsAddressField, ("private_ip", "public_ip", "private_dns", "public_dns"),
+)
+
+# The provider and translator, with their option blocks, are parsed by
+# _parse_seed_provider and _parse_translator: each is one setting, applied whole
+# or skipped whole, since half a provider is not a provider.
+_DISCOVERY_PROVIDER_KEYS = frozenset({"provider", "dns", "aws"})
+_DISCOVERY_KEYS: _KeyMap = {
+    "merge_policy": ("merge_policy", _MERGE_POLICIES),
+    "execution_mode": ("execution_mode", "execution_mode"),
+    "refresh_interval_ms": ("refresh_interval", "millis"),
+    "refresh_timeout_ms": ("refresh_timeout", "millis"),
+    "tend_refresh_deadline_ms": ("tend_refresh_deadline", "millis"),
+}
+_TRANSLATOR_KEYS = frozenset({"provider", "static_map", "port_map"})
+_TRANSLATION_KEYS: _KeyMap = {
+    "on_miss": ("on_miss", _MISS_MODES),
+}
+_DNS_KEYS: _KeyMap = {
+    "names": ("names", "strings"),
+    "record_type": ("record_type", _DNS_RECORD_TYPES),
+    "port": ("port", "port"),
+    "tls_name": ("tls_name", str),
+    "timeout_ms": ("timeout", "positive"),
+    "servers": ("servers", "strings"),
+}
+_AWS_KEYS: _KeyMap = {
+    "region": ("region", str),
+    "filters": ("filters", "aws_filters"),
+    "address_field": ("address_field", _AWS_ADDRESS_FIELDS),
+    "port": ("port", "port"),
+    "tls_name": ("tls_name", str),
+    "timeout_ms": ("timeout", "positive"),
+    "init_timeout_ms": ("init_timeout", "positive"),
+    "endpoint": ("endpoint", str),
+}
+_SEED_PROVIDERS = ("static", "dns", "aws-tags")
+_TRANSLATORS = ("static-map", "port-map", "pass-through")
+# The option block each provider takes, and that no other provider accepts.
+_PROVIDER_OPTIONS = {"dns": ("dns", _DNS_KEYS), "aws-tags": ("aws", _AWS_KEYS)}
+_PROVIDER_REQUIRED = {"dns": ("names",), "aws-tags": ("region", "filters")}
 
 # behaviors: selector blocks -> Settings scopes.
 _BEHAVIOR_SELECTOR_SCOPES: Dict[str, Scope] = {
@@ -363,6 +436,36 @@ def _convert(raw: object, converter: object, disk_key: str) -> object:
                 f"{disk_key} must be one of {', '.join(_LATENCY_UNITS)}, got {raw!r}"
             )
         return raw.lower()
+    if isinstance(converter, _Spelled):
+        if isinstance(raw, str) and raw.lower() in converter.spellings:
+            return getattr(converter.enum, raw.upper())
+        raise ValueError(
+            f"{disk_key} must be one of {', '.join(converter.spellings)}, got {raw!r}"
+        )
+    if converter == "execution_mode":
+        try:
+            return DiscoveryExecutionMode(raw)
+        except ValueError:
+            names = ", ".join(member.value for member in DiscoveryExecutionMode)
+            raise ValueError(f"{disk_key} must be one of {names}, got {raw!r}") from None
+    if converter in ("millis", "positive", "port"):
+        upper = 65535 if converter == "port" else None
+        if (
+            not isinstance(raw, int) or isinstance(raw, bool) or raw < 1
+            or (upper is not None and raw > upper)
+        ):
+            bound = f"between 1 and {upper}" if upper else ">= 1"
+            raise ValueError(f"{disk_key} must be an integer {bound}, got {raw!r}")
+        return timedelta(milliseconds=raw) if converter == "millis" else raw
+    if converter == "strings":
+        if (
+            not isinstance(raw, list) or not raw
+            or not all(isinstance(item, str) and item for item in raw)
+        ):
+            raise ValueError(f"{disk_key} must be a non-empty list of strings, got {raw!r}")
+        return list(raw)
+    if converter == "aws_filters":
+        return _aws_filters(raw, disk_key)
     if converter == "attempts":
         # The file counts the initial call as an attempt; the policy model
         # counts retries after it.
@@ -390,6 +493,21 @@ def _convert(raw: object, converter: object, disk_key: str) -> object:
                 return member
         raise ValueError(f"{disk_key} must name a {converter.__name__} value, got {raw!r}")
     raise AssertionError(f"unknown converter for {disk_key}")
+
+
+def _aws_filters(raw: object, disk_key: str) -> Dict[str, List[str]]:
+    """``[{name: tag:role, values: [aerospike]}, ...]`` as a name -> values map."""
+    if not isinstance(raw, list) or not raw:
+        raise ValueError(f"{disk_key} must be a non-empty list of {{name, values}}, got {raw!r}")
+    filters: Dict[str, List[str]] = {}
+    for entry in raw:
+        if (
+            not isinstance(entry, Mapping) or set(entry) != {"name", "values"}
+            or not isinstance(entry["name"], str)
+        ):
+            raise ValueError(f"{disk_key} entry must be {{name, values}}, got {entry!r}")
+        filters[entry["name"]] = _convert(entry["values"], "strings", f"{disk_key} values")
+    return filters
 
 
 def _parse_section(
@@ -438,6 +556,12 @@ def _parse_profile(name: str, profile: object) -> SystemSettings:
     txn_kwargs: Dict[str, object] = {}
     metrics_kwargs: Dict[str, object] = {}
     for section_name, section in profile.items():
+        if section_name == "discovery":
+            settings_kwargs["discovery"] = _parse_discovery(f"{name}.discovery", section)
+            continue
+        if section_name == "translation":
+            settings_kwargs["translation"] = _parse_translation(f"{name}.translation", section)
+            continue
         key_map = _SECTIONS.get(section_name)
         if key_map is None:
             _record_drop(f"section {section_name!r} in profile {name!r}")
@@ -455,6 +579,117 @@ def _parse_profile(name: str, profile: object) -> SystemSettings:
     if metrics_kwargs:
         settings_kwargs["metrics"] = MetricsSettings(**metrics_kwargs)  # type: ignore[arg-type]
     return SystemSettings(**settings_kwargs)  # type: ignore[arg-type]
+
+
+def _scalars(path: str, section: Mapping, key_map: _KeyMap, skip: frozenset) -> Dict[str, Any]:
+    """The scalar keys of a block, minus *skip*; see :func:`_parse_section`."""
+    return _parse_section(path, {k: v for k, v in section.items() if k not in skip}, key_map)
+
+
+def _parse_discovery(path: str, section: object) -> DiscoverySettings:
+    """Parse a ``discovery`` block; a bad provider is skipped whole."""
+    if not isinstance(section, Mapping):
+        log.warning("SDK config: section %r is not a mapping; ignored", path)
+        return DiscoverySettings()
+    kwargs = _scalars(path, section, _DISCOVERY_KEYS, _DISCOVERY_PROVIDER_KEYS)
+    if _DISCOVERY_PROVIDER_KEYS.intersection(section):
+        try:
+            kwargs["provider"] = _parse_seed_provider(path, section)
+        except ValueError as exc:
+            log.warning("SDK config: skipping %s.provider: %s", path, exc)
+    mode = kwargs.get("execution_mode")
+    if mode is not None and "provider" in kwargs:
+        try:
+            check_execution_mode(kwargs["provider"], mode)
+        except AerospikeError as exc:
+            log.warning("SDK config: skipping %s.execution_mode: %s", path, exc)
+            del kwargs["execution_mode"]
+    return DiscoverySettings(**kwargs)
+
+
+def _parse_seed_provider(path: str, section: Mapping) -> FileSeedProvider:
+    """The provider a ``discovery`` block names, with its option block.
+
+    Raises:
+        ValueError: If the provider, or any of its options, is invalid.
+    """
+    name = section.get("provider", "static")
+    if name not in _SEED_PROVIDERS:
+        raise ValueError(f"must be one of {', '.join(_SEED_PROVIDERS)}, got {name!r}")
+    for other, (block, _) in _PROVIDER_OPTIONS.items():
+        if other != name and block in section:
+            raise ValueError(f"{path}.{block} applies only to provider {other}")
+    if name not in _PROVIDER_OPTIONS:
+        return FileSeedProvider(name)
+    block, key_map = _PROVIDER_OPTIONS[name]
+    options = section.get(block)
+    if not isinstance(options, Mapping):
+        raise ValueError(f"provider {name} needs a {path}.{block} mapping")
+    kwargs: Dict[str, Any] = {}
+    for key, raw in options.items():
+        entry = key_map.get(key)
+        if entry is None:
+            _record_drop(f"key {path}.{block}.{key}")
+            continue
+        kwargs[entry[0]] = _convert(raw, entry[1], f"{path}.{block}.{key}")
+    missing = [key for key in _PROVIDER_REQUIRED[name] if key not in kwargs]
+    if missing:
+        raise ValueError(f"{path}.{block} needs {', '.join(missing)}")
+    provider = FileSeedProvider(name, kwargs)
+    try:
+        provider.build()
+    except (ValueError, TypeError, PncAerospikeError) as exc:
+        raise ValueError(str(exc)) from exc
+    return provider
+
+
+def _parse_translation(path: str, section: object) -> TranslationSettings:
+    """Parse a ``translation`` block; a bad translator is skipped whole.
+
+    A block with neither ``provider`` nor ``static_map`` leaves the
+    translator set in code and sets only ``on_miss``.
+    """
+    if not isinstance(section, Mapping):
+        log.warning("SDK config: section %r is not a mapping; ignored", path)
+        return TranslationSettings()
+    kwargs = _scalars(path, section, _TRANSLATION_KEYS, _TRANSLATOR_KEYS)
+    if _TRANSLATOR_KEYS.intersection(section):
+        try:
+            kwargs["translator"] = _parse_translator(path, section)
+        except ValueError as exc:
+            log.warning("SDK config: skipping %s.provider: %s", path, exc)
+    return TranslationSettings(**kwargs)
+
+
+def _parse_translator(path: str, section: Mapping) -> FileAddressTranslator:
+    """The translator a ``translation`` block names.
+
+    Raises:
+        ValueError: If the translator or its map is invalid.
+    """
+    name = section.get("provider", "static-map")
+    if name not in _TRANSLATORS:
+        raise ValueError(f"must be one of {', '.join(_TRANSLATORS)}, got {name!r}")
+    for key, owner in (("static_map", "static-map"), ("port_map", "port-map")):
+        if key in section and name != owner:
+            raise ValueError(f"{path}.{key} applies only to provider {owner}")
+    mapping = None
+    if name != "pass-through":
+        key = "port_map" if name == "port-map" else "static_map"
+        mapping = section.get(key)
+        if mapping is None and name == "port-map":
+            raise ValueError(f"provider port-map needs {path}.port_map")
+        if mapping is not None and not (
+            isinstance(mapping, Mapping)
+            and all(isinstance(k, str) and isinstance(v, str) for k, v in mapping.items())
+        ):
+            raise ValueError(f"{path}.{key} must be a string map, got {mapping!r}")
+    translator = FileAddressTranslator(name, dict(mapping) if mapping is not None else None)
+    try:
+        translator.build()
+    except (ValueError, TypeError, PncAerospikeError) as exc:
+        raise ValueError(str(exc)) from exc
+    return translator
 
 
 def _parse_metrics_extras(profile_name: str, section: object) -> Dict[str, object]:
@@ -735,31 +970,61 @@ def merge_settings(
 ) -> Optional[SystemSettings]:
     """Merge two settings layers per-field; *higher* wins where it has a value.
 
-    ``None`` fields in *higher* fall through to *lower*. The nested
-    :class:`TransactionSettings` and :class:`MetricsSettings` groups merge
-    the same way, field by field.
+    ``None`` fields in *higher* fall through to *lower*. The nested groups
+    (:class:`TransactionSettings`, :class:`MetricsSettings`, and the
+    discovery and translation groups) merge the same way, field by field.
     Either argument may be ``None`` (that layer absent).
     """
     if higher is None:
         return lower
     if lower is None:
         return higher
+    return _merge_fields(higher, lower)
+
+
+_GROUPS = frozenset({"transactions", "metrics", "discovery", "translation"})
+
+
+def _merge_fields(higher: Any, lower: Any) -> Any:
     merged: Dict[str, Any] = {}
-    for f in fields(SystemSettings):
-        if f.name in ("transactions", "metrics"):
-            continue
+    for f in fields(higher):
         hi = getattr(higher, f.name)
-        merged[f.name] = hi if hi is not None else getattr(lower, f.name)
-    met: Dict[str, Any] = {}
-    for f in fields(MetricsSettings):
-        hi = getattr(higher.metrics, f.name)
-        met[f.name] = hi if hi is not None else getattr(lower.metrics, f.name)
-    merged["metrics"] = MetricsSettings(**met)
-    txn: Dict[str, Any] = {}
-    for f in fields(TransactionSettings):
-        hi = getattr(higher.transactions, f.name)
-        txn[f.name] = hi if hi is not None else getattr(lower.transactions, f.name)
-    return SystemSettings(transactions=TransactionSettings(**txn), **merged)
+        lo = getattr(lower, f.name)
+        if f.name in _GROUPS:
+            merged[f.name] = _merge_fields(hi, lo)
+        else:
+            merged[f.name] = hi if hi is not None else lo
+    return type(higher)(**merged)
+
+
+def resolve_settings(
+    file_layer: Optional[SystemSettings], programmatic: Optional[SystemSettings],
+) -> SystemSettings:
+    """Layer *file_layer* over *programmatic*, then fill hard defaults.
+
+    A file ``execution_mode`` that the resolved provider does not run in is
+    skipped with a warning, like any other invalid file value.
+
+    Args:
+        file_layer: The resolved file profiles, or ``None``.
+        programmatic: Settings supplied in code, or ``None``.
+
+    Returns:
+        The effective settings.
+    """
+    merged = merge_settings(file_layer, programmatic)
+    if file_layer is not None and merged is not None:
+        mode = file_layer.discovery.execution_mode
+        if mode is not None and runs_in(merged.discovery.provider) not in (None, mode):
+            log.warning(
+                "SDK config: skipping discovery.execution_mode %s: the seed "
+                "candidate provider runs in %s", mode, runs_in(merged.discovery.provider),
+            )
+            fallback = programmatic.discovery.execution_mode if programmatic else None
+            merged = replace(
+                merged, discovery=replace(merged.discovery, execution_mode=fallback),
+            )
+    return fill_hard_defaults(merged)
 
 
 def resolve_for_cluster(
@@ -906,7 +1171,7 @@ def load_and_resolve(
     """
     profiles = load_profiles(path)
     file_layer = resolve_for_cluster(profiles, cluster_name) if profiles else None
-    return fill_hard_defaults(merge_settings(file_layer, programmatic))
+    return resolve_settings(file_layer, programmatic)
 
 
 def resolve_from_env(
@@ -973,7 +1238,7 @@ def load_at_connect(
         file_layer = (
             resolve_for_cluster(loaded.profiles, cluster_name) if loaded.profiles else None
         )
-        settings = fill_hard_defaults(merge_settings(file_layer, programmatic))
+        settings = resolve_settings(file_layer, programmatic)
         if strict and dropped:
             raise ValueError(
                 f"SDK config {path} has {len(dropped)} unrecognized "

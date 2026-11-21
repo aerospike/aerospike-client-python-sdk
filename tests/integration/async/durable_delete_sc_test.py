@@ -452,6 +452,68 @@ class TestDurableDeleteOperate:
         assert row is not None
         assert row.as_bool() is False
 
+    async def test_write_that_empties_record_uses_default_durable_delete_on_strong_consistency(
+        self, session_sc, ds_sc, enterprise_sc,
+    ):
+        """Removing the last bin deletes the record; the SC durable default rides on the write."""
+        _skip_if_not_enterprise(enterprise_sc)
+        session = session_sc
+        key = ds_sc.id(10671)
+        await delete_keys_durable(session, [key])
+        await session.insert(key).bin("only").set_to(1).execute()
+
+        rs = await session.upsert(key).remove_bin("only").execute()
+        await rs.first_or_raise()
+
+        ex = await session.exists(key).include_missing_keys().execute()
+        row = await ex.first()
+        assert row is not None
+        assert row.as_bool() is False
+
+    async def test_write_that_empties_record_honors_non_durable_override_on_strong_consistency(
+        self, session_sc, ds_sc, enterprise_sc,
+    ):
+        """``without_durable_delete()`` reaches the wire on a plain write: SC refuses the expunge."""
+        _skip_if_not_enterprise(enterprise_sc)
+        session = session_sc
+        key = ds_sc.id(10672)
+        await delete_keys_durable(session, [key])
+        await session.insert(key).bin("only").set_to(1).execute()
+
+        with pytest.raises(AerospikeError) as ei:
+            rs = await (
+                session.upsert(key).remove_bin("only").without_durable_delete().execute()
+            )
+            await rs.first_or_raise()
+        assert ei.value.result_code == ResultCode.FAIL_FORBIDDEN
+
+        ex = await session.exists(key).include_missing_keys().execute()
+        row = await ex.first()
+        assert row is not None
+        assert row.as_bool() is True
+        await delete_keys_durable(session, [key])
+
+    async def test_write_that_empties_record_honors_durable_override_on_strong_consistency(
+        self, session_sc, ds_sc, enterprise_sc,
+    ):
+        """``with_durable_delete()`` on a plain write wins over a non-durable SC default."""
+        _skip_if_not_enterprise(enterprise_sc)
+        probe_behavior = Behavior.DEFAULT.derive_with_changes(
+            "sc_non_durable_writes", writes_sc=Settings(durable_delete=False),
+        )
+        session = session_sc._client.create_session(behavior=probe_behavior)
+        key = ds_sc.id(10673)
+        await delete_keys_durable(session_sc, [key])
+        await session.insert(key).bin("only").set_to(1).execute()
+
+        rs = await session.upsert(key).remove_bin("only").with_durable_delete().execute()
+        await rs.first_or_raise()
+
+        ex = await session.exists(key).include_missing_keys().execute()
+        row = await ex.first()
+        assert row is not None
+        assert row.as_bool() is False
+
 
 @pytest.mark.asyncio(loop_scope="session")
 class TestDurableDeleteBatchReset:
@@ -723,6 +785,47 @@ class TestDurableDeleteDefaultPointDelete:
 
         del_stream = await session.delete(key).execute()
         assert (await del_stream.first_or_raise()).as_bool()
+
+        ex = await session.exists(key).include_missing_keys().execute()
+        row = await ex.first()
+        assert row is not None
+        assert row.as_bool() is False
+
+    async def test_default_session_batch_delete_on_strong_consistency_without_explicit_durable_opt_in(
+        self, session_sc, ds_sc, enterprise_sc,
+    ):
+        """Default session batch delete on SC: the SC durable default alone must satisfy the server."""
+        _skip_if_not_enterprise(enterprise_sc)
+        session = session_sc
+        keys = ds_sc.ids(10721, 10725)
+        await delete_keys_durable(session, keys)
+        await session.upsert(*keys).bin("ddbDefBatch").set_to(1).execute()
+
+        rows = await (await session.delete(*keys).execute()).collect()
+        assert len(rows) == len(keys)
+        for i, rr in enumerate(rows):
+            assert rr.result_code == ResultCode.OK, f"index {i}: {rr.result_code}"
+
+        ex_rows = await (await session.exists(*keys).include_missing_keys().execute()).collect()
+        assert len(ex_rows) == len(keys)
+        for i, rr in enumerate(ex_rows):
+            assert rr.as_bool() is False, f"record should be deleted; index {i}"
+
+    async def test_default_session_operate_delete_record_on_strong_consistency_without_explicit_durable_opt_in(
+        self, session_sc, ds_sc, enterprise_sc,
+    ):
+        """Default session operate delete_record on SC: no chain default, no override."""
+        _skip_if_not_enterprise(enterprise_sc)
+        session = session_sc
+        key = ds_sc.id(10726)
+        bin_name = "ddbDefOp"
+        await delete_keys_durable(session, [key])
+        await session.upsert(key).bin(bin_name).set_to(1).execute()
+
+        rs = await session.update(key).bin(bin_name).get().delete_record().execute()
+        first = await rs.first_or_raise()
+        assert first.record is not None
+        assert first.record.bins[bin_name] == 1
 
         ex = await session.exists(key).include_missing_keys().execute()
         row = await ex.first()

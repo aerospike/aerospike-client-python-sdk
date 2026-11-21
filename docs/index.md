@@ -142,6 +142,7 @@ pip install -e ".[dev]"
 :caption: Getting Started
 
 guide/connecting
+guide/discovery
 guide/dynamic-sdk-config
 ```
 
@@ -163,6 +164,7 @@ guide/string-ops
 
 guide/expression-ael
 guide/indexes
+guide/vectors
 ```
 
 ```{toctree}

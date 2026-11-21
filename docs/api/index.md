@@ -65,12 +65,14 @@ Shared types used by both async and sync APIs.
 | [`Behavior`](behavior.md) | Policy presets (timeouts, consistency) |
 | [`ClusterDefinition`](cluster-definition.md) | Cluster connection configuration |
 | [`SystemSettings`](system-settings.md) | Global system-level tunables |
+| [Seed discovery, address translation](discovery.md) | Seed candidate providers, address translators, and their settings |
 | [`ErrorStrategy`](error-strategy.md) | Error handling strategies |
 | [`Exceptions`](exceptions.md) | Exception hierarchy |
 | [`ResultCode`](result-code.md) | Server and client result codes carried on every error and record result |
 | [`ErrorDetailVerbosity`](error-detail-verbosity.md) | How much server error detail to request: subcode, message, expression trace |
 | [`ExpressionTrace`](expression-trace.md) | Structured expression build trace on `AerospikeError` (verbosity 3) |
 | [`QueryHint`](query-hint.md) | Query optimization hints |
+| [`Vector`, `BinDataType`, `Order`](vector.md) | Vector bin values, distance metrics, and Top-K order key types |
 | [`Metrics`](metrics.md) | Metrics policy, snapshot, and derived latency views |
 | [`SdkLoggers`](loggers.md) | Stable logger names for operator tuning |
 
@@ -129,12 +131,14 @@ record-stream
 behavior
 cluster-definition
 system-settings
+discovery
 error-strategy
 error-detail-verbosity
 expression-trace
 exceptions
 result-code
 query-hint
+vector
 metrics
 loggers
 exp

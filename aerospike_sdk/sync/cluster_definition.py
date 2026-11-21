@@ -76,11 +76,12 @@ class ClusterDefinition(ClusterDefinitionBase):
         # SDK config file (AEROSPIKE_SDK_CONFIG_URL): applies the behaviors
         # section, layers system settings over programmatic ones per-field,
         # and arms hot-reload on the client when a path is configured.
+        programmatic = self._programmatic_settings()
         settings, config_path, raw = load_at_connect(
-            self._cluster_name, self._system_settings, strict=self._strict_config
+            self._cluster_name, programmatic, strict=self._strict_config
         )
         config_source = (
-            SdkConfigSource(config_path, self._cluster_name, self._system_settings, raw)
+            SdkConfigSource(config_path, self._cluster_name, programmatic, raw)
             if config_path is not None
             else None
         )
