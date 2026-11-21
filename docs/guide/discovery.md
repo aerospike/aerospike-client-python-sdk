@@ -50,6 +50,11 @@ connect and no seed is left to try, `connect()` raises `SeedDiscoveryError`.
 | `AwsEc2TagSeedCandidateProvider` | running EC2 instances matching tag filters | on the cluster tend task |
 | a `SeedCandidateProvider` subclass | your code | on a background thread |
 
+`DnsSeedCandidateProvider` sends its queries to `servers`, or else to the
+`nameserver` entries of `/etc/resolv.conf`. Windows has no such file, so on
+Windows pass `servers` (in the SDK config file, `dns.servers`); without it the
+provider raises when it is created.
+
 The AWS provider signs its own `DescribeInstances` request. It resolves
 credentials from `credentials=`, or else the environment, the shared profile,
 EKS web identity, ECS, and the instance metadata service, in that order. A
