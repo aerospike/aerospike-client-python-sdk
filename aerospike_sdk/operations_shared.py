@@ -745,6 +745,12 @@ class _WriteSegmentBuilderBase(_ExpirationVerbs[_QB], _ChainVerbs[_QB]):
         The operation's own ``is_idempotent`` decides whether the segment
         keeps the behavior's retryable write scope: a raw ``add`` takes the
         segment off it exactly as the ``add`` verb does.
+
+        See Also:
+            :class:`~aerospike_sdk.Operation`, :class:`~aerospike_sdk.ListOperation`,
+            :class:`~aerospike_sdk.MapOperation`, :class:`~aerospike_sdk.BitOperation`,
+            :class:`~aerospike_sdk.HllOperation`, :class:`~aerospike_sdk.ExpOperation`:
+            The factories that build an operation to pass here.
         """
         if not op.is_idempotent:
             return self._add_modify_op(op)
@@ -1381,6 +1387,12 @@ class _SingleKeyWriteSegmentBase(_WriteSegmentBuilderBase):
 
         The operation's own ``is_idempotent`` decides whether the segment
         keeps the behavior's retryable write scope.
+
+        See Also:
+            :class:`~aerospike_sdk.Operation`, :class:`~aerospike_sdk.ListOperation`,
+            :class:`~aerospike_sdk.MapOperation`, :class:`~aerospike_sdk.BitOperation`,
+            :class:`~aerospike_sdk.HllOperation`, :class:`~aerospike_sdk.ExpOperation`:
+            The factories that build an operation to pass here.
         """
         if not op.is_idempotent:
             return self._add_modify_op(op)

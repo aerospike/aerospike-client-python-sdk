@@ -17,7 +17,17 @@
 
 import pytest
 import pytest_asyncio
-from aerospike_sdk import CTX, CdtOperation, Exp, ExpType, ListOrderType, ListSortFlags, MapOrder
+from aerospike_sdk import (
+    CTX,
+    CdtOperation,
+    Exp,
+    ExpType,
+    ListOrderType,
+    ListSortFlags,
+    MapOperation,
+    MapOrder,
+    MapPolicy,
+)
 from aerospike_sdk import SortedMap
 from aerospike_sdk import LoopVarPart
 
@@ -1605,3 +1615,19 @@ class TestPathExpressionRemove:
 
         result = await (await session.query(k).execute()).first_or_raise()
         assert result.record.bins["nums"] == [3, 2]
+
+
+class TestAddOperationWithMapOperation:
+    """A prebuilt ``MapOperation`` passed to ``add_operation`` applies on a point write."""
+
+    async def test_map_operation_put_adds_the_entry(self, cluster):
+        session = cluster.create_session()
+        k = DS.id("add_op_map_put")
+        await session.upsert(k).put({"scores": {"art": 81}}).execute()
+
+        await session.update(k).add_operation(
+            MapOperation.put("scores", "math", 97, MapPolicy(MapOrder.KEY_ORDERED))
+        ).execute()
+
+        result = await (await session.query(k).execute()).first_or_raise()
+        assert result.record.bins["scores"] == {"art": 81, "math": 97}

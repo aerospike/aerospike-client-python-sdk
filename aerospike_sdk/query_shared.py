@@ -2036,11 +2036,10 @@ class _QueryBuilderBase:
         """
         base = self._base_write_policy if spec.retryable else self._base_write_policy_nr
         if base is None:
-            base_settings = settings
-            if base_settings.durable_delete:
-                base_settings = Settings.merge(
-                    base_settings, Settings(durable_delete=False))
-            base = self._apply_txn(to_write_policy(base_settings))
+            base = to_write_policy(settings)
+            if settings.durable_delete:
+                base.durable_delete = False
+            base = self._apply_txn(base)
             if spec.retryable:
                 self._base_write_policy = base
             else:

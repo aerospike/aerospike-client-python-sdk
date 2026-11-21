@@ -18,8 +18,8 @@
 from datetime import timedelta
 
 import pytest
-from aerospike_native import CommitLevel, ReadModeAP, ReadModeSC, Replica
 
+from aerospike_sdk.policy import CommitLevel, ReadModeAP, ReadModeSC, Replica
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.behavior_registry import (
     get_all_behaviors,
@@ -807,3 +807,44 @@ class TestSettingsKeywordOnly:
         """Every field is optional, so a positional value would bind by declaration order."""
         with pytest.raises(TypeError):
             Settings(timedelta(seconds=1))
+
+
+class TestSettingsEnumFields:
+    """The four enum-typed fields take a member of their enum, or None."""
+
+    @pytest.mark.parametrize(
+        ("field", "enum_name", "value"),
+        [
+            ("commit_level", "CommitLevel", "COMMIT_ALL"),
+            ("replica", "Replica", "MASTER"),
+            ("read_mode_ap", "ReadModeAP", "ALL"),
+            ("read_mode_sc", "ReadModeSC", "LINEARIZE"),
+        ],
+    )
+    def test_a_name_in_place_of_a_member_is_a_type_error(self, field, enum_name, value):
+        with pytest.raises(TypeError) as exc_info:
+            Settings(**{field: value})
+        message = str(exc_info.value)
+        assert f"Settings.{field} must be a {enum_name}" in message
+        assert f"from aerospike_sdk.policy import {enum_name}" in message
+        assert f"got str '{value}'" in message
+
+    def test_a_member_of_another_enum_is_a_type_error(self):
+        with pytest.raises(TypeError, match="Settings.read_mode_ap must be a ReadModeAP"):
+            Settings(read_mode_ap=ReadModeSC.SESSION)
+
+    def test_members_and_none_are_accepted(self):
+        settings = Settings(
+            commit_level=CommitLevel.COMMIT_MASTER,
+            replica=Replica.MASTER_PROLES,
+            read_mode_ap=ReadModeAP.ALL,
+            read_mode_sc=ReadModeSC.LINEARIZE,
+        )
+        assert settings.replica == Replica.MASTER_PROLES
+        assert Settings().commit_level is None
+
+    def test_merge_keeps_checked_members(self):
+        merged = Settings.merge(
+            Settings(replica=Replica.MASTER), Settings(read_mode_ap=ReadModeAP.ALL),
+        )
+        assert (merged.replica, merged.read_mode_ap) == (Replica.MASTER, ReadModeAP.ALL)

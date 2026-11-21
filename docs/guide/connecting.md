@@ -369,6 +369,22 @@ Each change names the operations it applies to: `all=` covers every
 operation, and narrower scopes such as `reads=`, `reads_batch=`, or
 `writes_sc=` override it for their operations.
 
+The fields that choose among server behaviors take a member of an enum from
+`aerospike_sdk.policy`, in the scope the setting applies to. Commit level is
+an AP setting, so it goes in `writes_ap=`:
+
+```python
+from aerospike_sdk.policy import CommitLevel, Settings
+
+fast_writes = Behavior.DEFAULT.derive_with_changes(
+    "fast-writes",
+    writes_ap=Settings(commit_level=CommitLevel.COMMIT_MASTER),
+)
+```
+
+`Replica`, `ReadModeAP` and `ReadModeSC` are set the same way; see
+[Policy enums](../api/policy-enums.md).
+
 (retryable-writes)=
 ### Retryable and non-retryable writes
 

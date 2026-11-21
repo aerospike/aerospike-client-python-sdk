@@ -116,6 +116,10 @@ class BackgroundOperationBuilder:
 
         See Also:
             :meth:`aerospike_sdk.aio.background.BackgroundOperationBuilder.add_operation`
+            :class:`~aerospike_sdk.Operation`, :class:`~aerospike_sdk.ListOperation`,
+            :class:`~aerospike_sdk.MapOperation`, :class:`~aerospike_sdk.BitOperation`,
+            :class:`~aerospike_sdk.HllOperation`, :class:`~aerospike_sdk.ExpOperation`:
+            The factories that build an operation to pass here.
         """
         self._inner.add_operation(op)
         return self
