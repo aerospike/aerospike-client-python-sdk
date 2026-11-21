@@ -58,7 +58,6 @@ WATCH_CONNECT_TIMEOUT_S = 0.05
 WATCH_SERVING_ROUNDS = 3
 WATCH_GIVE_UP_MS = 60_000
 QUIT_GRACE_S = 30
-SERVE_CONCURRENCY = 16
 
 _START = time.monotonic()
 _OUT_LOCK = threading.Lock()
@@ -587,24 +586,25 @@ class Driver:
         keys = await pick_partition_keys_yielding(self.dataset, step)
         written = read = mismatched = failures = 0
         first_failure: Optional[str] = None
-        gate = asyncio.Semaphore(SERVE_CONCURRENCY)
 
         async def one(pid: int) -> Tuple[int, int, int, int, Optional[str]]:
             value = f"{step}-{pid}"
-            async with gate:
-                try:
-                    await session.put(keys[pid], {"v": value})
-                except Exception as e:
-                    return 0, 0, 0, 1, f"partition {pid} put: {type(e).__name__}: {e}"
-                try:
-                    record = await session.get(keys[pid])
-                except RecordNotFoundError:
-                    return 1, 0, 1, 0, None
-                except Exception as e:
-                    return 1, 0, 0, 1, f"partition {pid} get: {type(e).__name__}: {e}"
+            try:
+                await session.put(keys[pid], {"v": value})
+            except Exception as e:
+                return 0, 0, 0, 1, f"partition {pid} put: {type(e).__name__}: {e}"
+            try:
+                record = await session.get(keys[pid])
+            except RecordNotFoundError:
+                return 1, 0, 1, 0, None
+            except Exception as e:
+                return 1, 0, 0, 1, f"partition {pid} get: {type(e).__name__}: {e}"
             return (1, 1, 0, 0, None) if record.bins.get("v") == value else (1, 0, 1, 0, None)
 
-        for w, r, m, f, failure in await asyncio.gather(*(one(pid) for pid in range(PARTITIONS))):
+        # One command at a time, so serve holds one connection per node: the
+        # l2-proxy port-range profile gives each node only 10 source ports.
+        for pid in range(PARTITIONS):
+            w, r, m, f, failure = await one(pid)
             written += w
             read += r
             mismatched += m
