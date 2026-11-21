@@ -25,8 +25,8 @@ the same surface. Both connect through `ClusterDefinition`.
 | `aerospike-native` | the Python Native Client (PNC) this SDK is built on |
 | `aerospike` | the legacy client - a different API entirely |
 
-Write `aerospike_sdk` idioms. Importing `aerospike_native` types is correct only
-for the surfaces this SDK does not yet wrap - see Known traps.
+Write `aerospike_sdk` idioms. SDK code never imports `aerospike_native` - see
+Known traps.
 
 ### What to read, by task
 
@@ -105,11 +105,12 @@ A guide that contradicts a docstring is stale, not authoritative. Report it.
   from `aerospike_sdk` directly - see `docs/guide/expression-ael.md`. Removal
   of matching elements is supported (`CdtOperation.remove`); do not conclude
   it does not exist.
-* **Importing `aerospike_native` types is correct in exactly one documented case:**
-  the low-level exception types described in `docs/guide/error-handling.md`.
-  Everywhere else, the `aerospike_sdk` re-exports cover it - `aerospike_sdk.Exp`
-  IS the low-level `FilterExpression`. (The string `"aerospike_native"` as a
-  logger name in logging config is fine - that is a name, not an import.)
+* **Never import `aerospike_native`.** Everything SDK code needs is re-exported
+  from `aerospike_sdk`: the policy enums (also in `aerospike_sdk.policy`),
+  `GeoJSON`, the operation builders for `add_operation()` with the policy and
+  flag types they take, and `Exp` (the low-level filter expression). (The
+  string `"aerospike_native"` as a logger name in logging config is fine - that
+  is a name, not an import.)
 * **Fast-path is single-key only.** `session.get(key)` / `session.put(key, bins)`
   take no filters, no error-handler callbacks, and no batch semantics. Use the
   chained builder when you need any of those.

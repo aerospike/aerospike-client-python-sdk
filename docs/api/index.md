@@ -19,6 +19,7 @@ The primary API. All operations are `async`/`await`.
 | [`CdtReadBuilder`](cdt-read.md) | Read operations on list and map CDTs |
 | [`CdtWriteBuilder`](cdt-write.md) | Write operations on list and map CDTs |
 | [`StringOperation`](string-builder.md) | Server-side string operation factory + flag types |
+| [Operation builders](operations.md) | `MapOperation`, `ListOperation` and the other factories for `add_operation()`, with their policy and flag types |
 | [`IndexBuilder`](index-builder.md) | Create and drop secondary indexes |
 | [`BackgroundTaskSession`](background.md) | Server-side background jobs (update, delete, touch, UDF) |
 | [`UdfFunctionBuilder`](udf.md) | Foreground UDF execution |
@@ -59,10 +60,12 @@ Shared types used by both async and sync APIs.
 | [`Key`](key.md) | One record's identity: namespace, set, user key, and digest |
 | [`HllConfig`](hll-config.md) | HyperLogLog bin precision (index + minhash bit counts) |
 | [`SortedMap`](sorted-map.md) | Declares a map bin key-ordered on a plain write |
+| [`GeoJSON`](geojson.md) | A geospatial value, for use inside a list, a map, or a `put` dict |
 | [`RecordResult`](record-result.md) | Single result from a query or batch |
 | [`OperationResult`](operation-result.md) | Typed-accessor wrapper around a single operation's value |
 | [`RecordStream`](record-stream.md) | Async iterator over query results |
 | [`Behavior`](behavior.md) | Policy presets (timeouts, consistency) |
+| [Policy enums](policy-enums.md) | `Replica`, `ReadModeAP`, `ReadModeSC`, `CommitLevel`: values of the enum-typed `Settings` fields |
 | [`ClusterDefinition`](cluster-definition.md) | Cluster connection configuration |
 | [`SystemSettings`](system-settings.md) | Global system-level tunables |
 | [`ErrorStrategy`](error-strategy.md) | Error handling strategies |
@@ -97,6 +100,7 @@ row-write
 cdt-read
 cdt-write
 string-builder
+operations
 index-builder
 background
 udf
@@ -123,10 +127,12 @@ dataset
 key
 hll-config
 sorted-map
+geojson
 record-result
 operation-result
 record-stream
 behavior
+policy-enums
 cluster-definition
 system-settings
 error-strategy

@@ -75,12 +75,41 @@ class Scope(Enum):
     SYSTEM_TXN_ROLL = "system_txn_roll"
 
 
+_ENUM_FIELDS = (
+    ("commit_level", CommitLevel),
+    ("replica", Replica),
+    ("read_mode_ap", ReadModeAP),
+    ("read_mode_sc", ReadModeSC),
+)
+
+
 @dataclass(frozen=True, kw_only=True)
 class Settings:
     """Immutable set of operation settings.
 
     All fields are Optional; ``None`` means "not configured / inherit from
     a less-specific scope or the parent Behavior".
+
+    Raises:
+        TypeError: If ``commit_level``, ``replica``, ``read_mode_ap`` or
+            ``read_mode_sc`` is given anything but a member of its enum, a
+            string name included. The enums are importable from
+            ``aerospike_sdk.policy``.
+
+    Example::
+
+        from datetime import timedelta
+
+        from aerospike_sdk.policy import Replica, Settings
+
+        reads = Settings(
+            total_timeout=timedelta(milliseconds=200),
+            replica=Replica.MASTER_PROLES,
+        )
+
+    See Also:
+        :meth:`~aerospike_sdk.policy.behavior.Behavior.derive_with_changes`:
+            Applies ``Settings`` to the operations a scope names.
     """
 
     total_timeout: Optional[timedelta] = None
@@ -109,6 +138,16 @@ class Settings:
     read_touch_ttl_percent: Optional[int] = None
 
     error_detail_verbosity: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        for name, enum_type in _ENUM_FIELDS:
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, enum_type):
+                raise TypeError(
+                    f"Settings.{name} must be a {enum_type.__name__} "
+                    f"(from aerospike_sdk.policy import {enum_type.__name__}), "
+                    f"got {type(value).__name__} {value!r}"
+                )
 
     @classmethod
     def merge(cls, base: Settings, override: Settings) -> Settings:

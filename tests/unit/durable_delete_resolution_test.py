@@ -77,6 +77,18 @@ class TestMakeWritePolicy:
         wp = qb._make_write_policy(spec)
         assert wp.durable_delete is True
 
+    def test_plain_write_policy_has_durable_delete_off_under_a_durable_behavior(self):
+        behavior = Behavior.DEFAULT.derive_with_changes(
+            "writes_durable",
+            writes=Settings(durable_delete=True),
+        )
+        qb = _make_qb(behavior=behavior)
+        qb._namespace_mode = Mode.AP
+        spec = _OperationSpec(keys=[_make_key()], op_type="upsert")
+        wp = qb._make_write_policy(spec)
+        assert wp is qb._plain_write_policy(spec, qb._point_write_settings(spec))
+        assert wp.durable_delete is False
+
     def test_make_write_policy_explicit_false_must_override_behavior_true(self):
         """Explicit non-durable must win when behavior requests durable deletes."""
         behavior = Behavior.DEFAULT.derive_with_changes(

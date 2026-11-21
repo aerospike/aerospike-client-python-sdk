@@ -78,6 +78,25 @@ await (
 AeroCircle and Polygon values use the same method — only the GeoJSON string
 differs.
 
+`set_to_geo_json(...)` writes one whole bin. For a geospatial value among
+other bins in `.put({...})`, or inside a list or a map, wrap the string in
+[`GeoJSON`](../api/geojson.md):
+
+```python
+from aerospike_sdk import GeoJSON
+
+await session.upsert(places.id("pike_place")).put({
+    "name": "Pike Place Market",
+    "loc": GeoJSON('{"type":"Point","coordinates":[-122.342,47.609]}'),
+    "entrances": [
+        GeoJSON('{"type":"Point","coordinates":[-122.341,47.609]}'),
+        GeoJSON('{"type":"Point","coordinates":[-122.343,47.610]}'),
+    ],
+}).execute()
+```
+
+A geospatial value reads back as a `GeoJSON`, wherever it sits.
+
 ## HyperLogLog Bins
 
 [`HllConfig`](../api/hll-config.md) describes a sketch's precision

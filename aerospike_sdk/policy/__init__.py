@@ -21,14 +21,28 @@ from aerospike_sdk.policy.behavior_registry import (
     get_behavior,
     get_behavior_or_default,
 )
-from aerospike_sdk.policy.behavior_settings import Mode, OpKind, OpShape, Scope, Settings
+from aerospike_sdk.policy.behavior_settings import (
+    CommitLevel,
+    Mode,
+    OpKind,
+    OpShape,
+    ReadModeAP,
+    ReadModeSC,
+    Replica,
+    Scope,
+    Settings,
+)
 from aerospike_sdk.policy.system_settings import SystemSettings, TransactionSettings
 
 __all__ = [
     "Behavior",
+    "CommitLevel",
     "Mode",
     "OpKind",
     "OpShape",
+    "ReadModeAP",
+    "ReadModeSC",
+    "Replica",
     "Scope",
     "Settings",
     "SystemSettings",

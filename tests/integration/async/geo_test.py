@@ -26,7 +26,7 @@ import asyncio
 import pytest
 
 from tests.pnc_compat import requires_server_compiled_ael
-from aerospike_sdk import Exp
+from aerospike_sdk import Exp, GeoJSON
 from aerospike_sdk.dataset import DataSet
 
 from tests.integration.namespace import general_namespace
@@ -170,3 +170,22 @@ class TestGeoQuery:
         stream.close()
         assert count == 5
 
+
+class TestGeoJSONValue:
+    """A ``GeoJSON`` places a geospatial value where no whole-bin setter reaches."""
+
+    async def test_geojson_inside_a_put_dict_reads_back_as_geojson(self, cluster):
+        session = cluster.create_session()
+        key = DataSet.of(NAMESPACE, "geoval_psdk").id("nested")
+        point = '{"type":"Point","coordinates":[-122.349,47.62]}'
+
+        await session.upsert(key).put({
+            "loc": GeoJSON(point),
+            "place": {"name": "Space Needle", "where": GeoJSON(point)},
+        }).execute()
+
+        bins = (await (await session.query(key).execute()).first_or_raise()).record.bins
+        assert isinstance(bins["loc"], GeoJSON)
+        assert isinstance(bins["place"]["where"], GeoJSON)
+        assert bins["place"]["where"] == GeoJSON(point)
+        assert bins["place"]["name"] == "Space Needle"
