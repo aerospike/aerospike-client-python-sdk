@@ -706,7 +706,10 @@ class _WriteSegmentBuilderBase(_ExpirationVerbs[_QB], _ChainVerbs[_QB]):
         """Apply ``Operation.put`` for each bin in the mapping.
 
         Args:
-            bins: Map of bin name to value.
+            bins: Map of bin name to value. An empty map queues nothing; a
+                write that reaches ``execute()`` with no bin operations at
+                all raises :class:`~aerospike_sdk.exceptions.AerospikeError`
+                with ``PARAMETER_ERROR``.
 
         Example::
             await session.upsert(key).put({"email": "a@b.com", "age": 30}).execute()

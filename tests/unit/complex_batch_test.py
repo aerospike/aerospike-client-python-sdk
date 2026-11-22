@@ -535,7 +535,7 @@ class TestChainLevelDefaults:
         qb._single_key = _make_key(1)
         qb.default_where("$.active == true")
 
-        wsb = qb.upsert(_make_key(2))
+        wsb = qb.upsert(_make_key(2)).put({"status": "VIP"})
         wsb.where("$.status == 'VIP'")
         qb._finalize_chain()
 
@@ -550,7 +550,7 @@ class TestChainLevelDefaults:
         qb._single_key = _make_key(1)
         qb.default_expire_record_after_seconds(600)
 
-        qb.upsert(_make_key(2))
+        qb.upsert(_make_key(2)).put({"status": "active"})
         qb._finalize_chain()
 
         assert qb._specs[1].ttl_seconds == 600
@@ -560,7 +560,7 @@ class TestChainLevelDefaults:
         qb._single_key = _make_key(1)
         qb.default_expire_record_after_seconds(600)
 
-        wsb = qb.upsert(_make_key(2))
+        wsb = qb.upsert(_make_key(2)).put({"status": "active"})
         wsb.expire_record_after_seconds(120)
         qb._finalize_chain()
 

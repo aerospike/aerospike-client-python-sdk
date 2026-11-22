@@ -152,6 +152,7 @@ from aerospike_sdk.implicit_txn import (
     implicit_txn_enabled,
 )
 from aerospike_sdk.exceptions import (
+    AerospikeError,
     _convert_pnc_exception,
     _result_code_to_exception,
 )
@@ -437,6 +438,11 @@ class _QueryBuilderBase:
     # a soft "no-op" outcome.
     _WRITES_REQUIRING_EXISTING_KEY = frozenset({"update", "replace_if_exists"})
 
+    # Write verbs that are meaningless without at least one bin operation.
+    # Delete, touch, exists and UDF segments legitimately carry none.
+    _WRITES_REQUIRING_OPERATIONS = frozenset(
+        {"upsert", "insert", "update", "replace", "replace_if_exists"})
+
     # Class-level defaults for always-virgin-at-init fields. Reads fall
     # through here until a chained method sets the instance attribute,
     # eliminating ~17 attribute writes per `session.query(key)` /
@@ -467,6 +473,9 @@ class _QueryBuilderBase:
     _operations_retryable: bool = True
     # Puts queued ahead of ``_operations``; see ``_OperationSpec.put_bins``.
     _put_bins: Optional[Dict[str, Any]] = None
+    # Verb of the first write segment closed with no operations; reported
+    # by ``_finalize_chain`` so the error surfaces at the terminal.
+    _empty_write_verb: Optional[str] = None
     _default_filter_expression: Optional[FilterExpression] = None
     _default_ttl_seconds: Optional[int] = None
     _udf_package: Optional[str] = None
@@ -1518,6 +1527,13 @@ class _QueryBuilderBase:
             keys = self._keys
         else:
             return
+        if (
+            not self._operations
+            and not self._put_bins
+            and self._op_type in self._WRITES_REQUIRING_OPERATIONS
+            and self._empty_write_verb is None
+        ):
+            self._empty_write_verb = self._op_type
         if self._usage_on:
             self._collect_segment_usage()
 
@@ -1569,8 +1585,18 @@ class _QueryBuilderBase:
         Called by every terminal that dispatches specs. Defaults resolve here
         rather than per segment so a ``default_*`` verb also covers segments
         closed before it was called. Safe to call more than once.
+
+        Raises:
+            AerospikeError: With ``PARAMETER_ERROR`` when a write segment
+                carries no operations. Nothing in the chain is sent.
         """
         self._finalize_current_spec()
+        if self._empty_write_verb is not None:
+            raise AerospikeError(
+                f"{self._empty_write_verb}() has no bins to write: add at least "
+                "one bin with put() or bin() before execute()",
+                result_code=ResultCode.PARAMETER_ERROR,
+            )
         if (
             self._default_filter_expression is not None
             or self._default_where_ael is not None

@@ -421,7 +421,7 @@ class Session(
         Args:
             key: Target :class:`~aerospike_sdk.Key`.
             bins: Mapping of bin name to value to write. An empty mapping
-                is permitted.
+                is rejected with ``PARAMETER_ERROR``.
 
         Returns:
             ``None`` on success.
