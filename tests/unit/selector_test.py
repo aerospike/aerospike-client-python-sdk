@@ -133,6 +133,23 @@ class TestSelectorMatching:
         assert not any(selector._matches(*key) for key in KEYS)
 
 
+class TestSelectorResolution:
+    """Each selector, through a derived behavior, changes exactly the cells it names."""
+
+    @pytest.mark.parametrize(
+        ("selector", "expected"), list(_matrix_selectors()), ids=lambda value: str(value)[:40],
+    )
+    def test_entry_changes_exactly_the_selected_cells(self, selector, expected):
+        behavior = _derive(on=[(selector, Settings(max_retries=91))])
+        for key in KEYS:
+            unchanged = Behavior.DEFAULT.get_settings(*key).max_retries
+            assert behavior.get_settings(*key).max_retries == (91 if key in expected else unchanged), key
+        for scope in TXN_SCOPES:
+            unchanged = _txn_settings(Behavior.DEFAULT, scope).max_retries
+            reached = selector == Selector.all()
+            assert _txn_settings(behavior, scope).max_retries == (91 if reached else unchanged), scope
+
+
 class TestSelectorValue:
 
     def test_chain_order_does_not_matter(self):
@@ -201,14 +218,6 @@ class TestSelectorValue:
 
 class TestOnPrecedence:
 
-    def test_entry_reaches_only_the_cells_its_selector_matches(self):
-        behavior = _derive(on=[(Selector.writes().retryable().point().ap(), Settings(max_retries=9))])
-        for key in KEYS:
-            expected = 9 if key == (RETRYABLE, OpShape.POINT, Mode.AP) else (
-                Behavior.DEFAULT.get_settings(*key).max_retries
-            )
-            assert behavior.get_settings(*key).max_retries == expected
-
     def test_entry_applies_after_a_narrower_keyword(self):
         behavior = _derive(
             reads_batch=Settings(max_retries=5),
@@ -262,6 +271,41 @@ class TestOnPrecedence:
         parent = _derive(on=[(Selector.reads().batch().ap(), Settings(max_retries=9))])
         child = _derive(parent, writes=Settings(max_retries=2))
         assert child.get_settings(READ, OpShape.BATCH, Mode.AP).max_retries == 9
+
+    def test_general_to_specific_cascade(self):
+        behavior = _derive(on=[
+            (Selector.all(), Settings(max_retries=1)),
+            (Selector.reads(), Settings(max_retries=2)),
+            (Selector.reads().batch(), Settings(max_retries=3)),
+            (Selector.reads().batch().ap(), Settings(max_retries=4)),
+        ])
+        assert behavior.get_settings(READ, OpShape.BATCH, Mode.AP).max_retries == 4
+        assert behavior.get_settings(READ, OpShape.BATCH, Mode.SC).max_retries == 3
+        assert behavior.get_settings(READ, OpShape.POINT, Mode.AP).max_retries == 2
+        assert behavior.get_settings(RETRYABLE, OpShape.POINT, Mode.AP).max_retries == 1
+
+    def test_same_selector_setting_one_field_twice_keeps_the_later_value(self):
+        behavior = _derive(on=[
+            (Selector.reads().ap(), Settings(read_mode_ap=ReadModeAP.ONE)),
+            (Selector.reads().ap(), Settings(read_mode_ap=ReadModeAP.ALL)),
+        ])
+        assert behavior.get_settings(READ, OpShape.POINT, Mode.AP).read_mode_ap == ReadModeAP.ALL
+
+    def test_three_levels_of_inheritance(self):
+        parent = _derive(on=[(Selector.reads().batch().ap(), Settings(
+            max_retries=9, total_timeout=timedelta(seconds=7),
+        ))])
+        child = _derive(parent, on=[(Selector.reads().batch(), Settings(max_retries=6))])
+        grandchild = _derive(child, on=[(Selector.reads().ap(), Settings(
+            retry_delay=timedelta(milliseconds=3),
+        ))])
+        settings = grandchild.get_settings(READ, OpShape.BATCH, Mode.AP)
+        assert (settings.max_retries, settings.total_timeout, settings.retry_delay) == (
+            6, timedelta(seconds=7), timedelta(milliseconds=3),
+        )
+        assert grandchild.get_settings(READ, OpShape.POINT, Mode.AP).max_retries == (
+            Behavior.DEFAULT.get_settings(READ, OpShape.POINT, Mode.AP).max_retries
+        )
 
     def test_constructor_takes_on(self):
         behavior = Behavior(
@@ -573,7 +617,14 @@ _APPLICABILITY = [
     ("allow_scans_with_where", True, Selector.reads().batch(), Selector.reads(), "query reads"),
 ]
 
-_UNRESTRICTED = {"total_timeout", "socket_timeout", "max_retries", "retry_delay"}
+# Fields every cell reads, with a value to set each to.
+_UNRESTRICTED_VALUES = {
+    "total_timeout": timedelta(milliseconds=123),
+    "socket_timeout": timedelta(milliseconds=45),
+    "max_retries": 6,
+    "retry_delay": timedelta(milliseconds=7),
+}
+_UNRESTRICTED = set(_UNRESTRICTED_VALUES)
 
 
 class TestFieldApplicability:
@@ -611,6 +662,33 @@ class TestFieldApplicability:
 
     def test_unset_fields_are_not_checked(self):
         _derive(on=[(Selector.txn_roll(), Settings(max_retries=3))])
+
+
+def _field_cases():
+    """Every Settings field with a value and a selector that covers some of its cells."""
+    for field, value in _UNRESTRICTED_VALUES.items():
+        yield field, value, Selector.all()
+    seen = set()
+    for field, value, _, covering, _ in _APPLICABILITY:
+        if field not in seen:
+            seen.add(field)
+            yield field, value, covering
+
+
+class TestEveryFieldResolvesThroughOn:
+
+    @pytest.mark.parametrize(
+        ("field", "value", "selector"), list(_field_cases()), ids=lambda value: str(value)[:30],
+    )
+    def test_field_set_through_an_entry_reads_back_on_the_selected_cells(self, field, value, selector):
+        behavior = _derive(on=[(selector, Settings(**{field: value}))])
+        cells = [key for key in KEYS if selector._matches(*key)]
+        phases = [scope for scope in TXN_SCOPES if selector._matches_txn(scope)]
+        assert cells or phases
+        for key in cells:
+            assert getattr(behavior.get_settings(*key), field) == value, key
+        for scope in phases:
+            assert getattr(_txn_settings(behavior, scope), field) == value, scope
 
 
 # The applicability table against the policy builders: outside a field's
