@@ -1180,6 +1180,11 @@ class _SingleKeyWriteSegment(_SingleKeyWriteSegmentBase, WriteSegmentBuilder):
         if on_error is not None:
             self._promote()
             return await self._qb.execute(on_error)  # type: ignore[union-attr]
+        # A write verb with nothing to write is refused by the builder, so
+        # every route reports it the same way.
+        if not self._ops and self._op_type_fast in _QueryBuilderBase._WRITES_REQUIRING_OPERATIONS:
+            self._promote()
+            return await self._qb.execute(on_error)  # type: ignore[union-attr]
         # Durable-delete state requires the slow path: bypasses don't carry
         # _dd_override / _dd_command_default through to the per-call policy,
         # and SC namespaces require the right durable_delete flag (FailForbidden
