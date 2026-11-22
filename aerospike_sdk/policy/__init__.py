@@ -32,6 +32,7 @@ from aerospike_sdk.policy.behavior_settings import (
     Scope,
     Settings,
 )
+from aerospike_sdk.policy.selector import ReadSelector, Selector, WriteSelector
 from aerospike_sdk.policy.system_settings import SystemSettings, TransactionSettings
 
 __all__ = [
@@ -42,11 +43,14 @@ __all__ = [
     "OpShape",
     "ReadModeAP",
     "ReadModeSC",
+    "ReadSelector",
     "Replica",
     "Scope",
+    "Selector",
     "Settings",
     "SystemSettings",
     "TransactionSettings",
+    "WriteSelector",
     "get_all_behaviors",
     "get_behavior",
     "get_behavior_or_default",

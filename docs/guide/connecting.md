@@ -385,6 +385,57 @@ fast_writes = Behavior.DEFAULT.derive_with_changes(
 `Replica`, `ReadModeAP` and `ReadModeSC` are set the same way; see
 [Policy enums](../api/policy-enums.md).
 
+### Targeting a combination
+
+Each keyword covers one dimension: a kind of operation, a shape, a
+retryability or a namespace mode. To change settings for a combination, such
+as retryable single-key writes on AP namespaces and nothing else, pass `on=` a
+list of `(selector, Settings)` pairs:
+
+```python
+from datetime import timedelta
+
+from aerospike_sdk.policy import CommitLevel, Selector, Settings
+
+critical_writes = Behavior.DEFAULT.derive_with_changes(
+    "critical-writes",
+    on=[
+        (Selector.writes().retryable().point().ap(), Settings(
+            total_timeout=timedelta(seconds=5),
+            max_retries=4,
+            commit_level=CommitLevel.COMMIT_ALL,
+        )),
+        (Selector.writes().non_retryable().point().ap(), Settings(
+            total_timeout=timedelta(seconds=5),
+            max_retries=0,
+            commit_level=CommitLevel.COMMIT_ALL,
+        )),
+    ],
+)
+```
+
+A [`Selector`](../api/selector.md) starts from `Selector.reads()`,
+`Selector.writes()` or `Selector.all()` and narrows with `point()`, `batch()`,
+`query()`, `ap()`, `sc()` and, for writes, `retryable()` or `non_retryable()`,
+in any order. `Selector.txn_verify()` and `Selector.txn_roll()` name the two
+transaction phases.
+
+The settings of a derived behavior resolve in three steps, later winning on
+each field a step sets:
+
+1. The parent behavior's settings.
+2. The keywords, in a fixed order whatever order you write them in: `all`,
+   then `reads` / `writes`, then mode, then retryability, then shape.
+3. The `on` entries whose selector matches, from first to last.
+
+So an `on` entry overrides any keyword in the same call, and among `on`
+entries the one listed later wins, however broad it is. List the general case
+first and the exception after it. A selector may appear more than once; every
+entry applies.
+
+An `on` entry that sets a field its selector cannot reach raises `ValueError`
+when the behavior is created, for example `commit_level` on a read selector.
+
 (retryable-writes)=
 ### Retryable and non-retryable writes
 

@@ -65,6 +65,7 @@ Shared types used by both async and sync APIs.
 | [`OperationResult`](operation-result.md) | Typed-accessor wrapper around a single operation's value |
 | [`RecordStream`](record-stream.md) | Async iterator over query results |
 | [`Behavior`](behavior.md) | Policy presets (timeouts, consistency) |
+| [`Selector`](selector.md) | Names a combination of operations for the `on` entries of a derived `Behavior` |
 | [Policy enums](policy-enums.md) | `Replica`, `ReadModeAP`, `ReadModeSC`, `CommitLevel`: values of the enum-typed `Settings` fields |
 | [`ClusterDefinition`](cluster-definition.md) | Cluster connection configuration |
 | [`SystemSettings`](system-settings.md) | Global system-level tunables |
@@ -132,6 +133,7 @@ record-result
 operation-result
 record-stream
 behavior
+selector
 policy-enums
 cluster-definition
 system-settings
