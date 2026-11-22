@@ -17,13 +17,15 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import weakref
 from datetime import timedelta
-from typing import ClassVar, Dict, List, Optional, Tuple
+from typing import ClassVar, Dict, Iterable, List, Optional, Tuple
 
 from aerospike_native import CommitLevel, ReadModeAP, ReadModeSC, Replica
 
+from aerospike_sdk.loggers import SdkLoggers
 from aerospike_sdk.policy.behavior_registry import _register
 from aerospike_sdk.policy.behavior_settings import (
     Mode,
@@ -33,8 +35,12 @@ from aerospike_sdk.policy.behavior_settings import (
     Settings,
     resolution_order,
 )
+from aerospike_sdk.policy.selector import Selector, _check_applicable
+
+log = logging.getLogger(SdkLoggers.BEHAVIOR)
 
 _OpKey = Tuple[OpKind, OpShape, Mode]
+_OnEntry = Tuple[Selector, Settings]
 
 # Guards session registration (create_session) against the reload walk
 # (config poller thread / task). Never taken on the operation path.
@@ -89,7 +95,7 @@ class Behavior:
     FAST_RACK_AWARE: ClassVar[Behavior]
 
     __slots__ = (
-        "_name", "_patches", "_parent", "_children", "_resolved", "_resolved_txn",
+        "_name", "_patches", "_on", "_parent", "_children", "_resolved", "_resolved_txn",
         "_sessions",
     )
 
@@ -98,9 +104,12 @@ class Behavior:
         name: str,
         patches: Dict[Scope, Settings],
         parent: Optional[Behavior] = None,
+        *,
+        on: Optional[Iterable[_OnEntry]] = None,
     ) -> None:
         self._name = name
         self._patches: Dict[Scope, Settings] = dict(patches)
+        self._on: Tuple[_OnEntry, ...] = _checked_on(on)
         self._parent = parent
         self._children: List[Behavior] = []
         self._resolved: Dict[_OpKey, Settings] = {}
@@ -214,14 +223,23 @@ class Behavior:
 
         Used by config-file hot-reload; existing references (registry
         entries, child behaviors, live sessions) observe the new settings.
+        ``on`` entries go too: the file has no form for them, and a behavior
+        it redefines is exactly what the file says.
         """
+        if self._on:
+            log.info(
+                "Behavior %r reloaded from the config file; dropped %d on entr%s set in code",
+                self._name, len(self._on), "y" if len(self._on) == 1 else "ies",
+            )
         self._patches = dict(patches)
+        self._on = ()
         self.clear_cache()
 
     def derive_with_changes(
         self,
         name: str,
         *,
+        on: Optional[Iterable[_OnEntry]] = None,
         all: Optional[Settings] = None,
         reads: Optional[Settings] = None,
         reads_point: Optional[Settings] = None,
@@ -247,11 +265,28 @@ class Behavior:
         or ``writes_sc`` override it for their operations. Fields left
         unset inherit from this behavior.
 
+        A keyword covers one dimension: a kind, a shape, a retryability or
+        a mode. To target a combination, such as retryable point writes on
+        AP namespaces, pass ``on`` a list of ``(selector, Settings)`` pairs.
+
+        The new behavior's settings resolve in three steps, later winning
+        on each field a step sets:
+
+        1. This behavior's own resolved settings.
+        2. The keywords, in a fixed order whatever order they are written
+           in: ``all``, then ``reads`` / ``writes``, then mode, then
+           retryability, then shape.
+        3. The ``on`` entries whose selector matches, in list order.
+
+        So an ``on`` entry overrides any keyword of the same call, and
+        among ``on`` entries the later one wins; there is no ranking by
+        how narrow a selector is.
+
         Example::
 
             from datetime import timedelta
 
-            from aerospike_sdk.policy import Settings
+            from aerospike_sdk.policy import CommitLevel, Selector, Settings
 
             fast_reads = Behavior.DEFAULT.derive_with_changes(
                 "fast_reads",
@@ -259,8 +294,22 @@ class Behavior:
                 reads=Settings(total_timeout=timedelta(milliseconds=200)),
             )
 
+            critical_writes = Behavior.DEFAULT.derive_with_changes(
+                "critical_writes",
+                on=[
+                    (Selector.writes().retryable().point().ap(), Settings(
+                        total_timeout=timedelta(seconds=5),
+                        max_retries=4,
+                        commit_level=CommitLevel.COMMIT_ALL,
+                    )),
+                ],
+            )
+
         Args:
             name: Name of the new behavior.
+            on: ``(selector, Settings)`` pairs, applied in order after the
+                keywords. A :class:`~aerospike_sdk.policy.selector.Selector`
+                may appear more than once; every entry applies.
             all: Settings for every operation.
             reads: Settings for all reads; ``reads_point``, ``reads_batch``,
                 ``reads_query``, ``reads_ap``, and ``reads_sc`` narrow that
@@ -281,9 +330,18 @@ class Behavior:
         Returns:
             A new :class:`Behavior` whose parent is this behavior.
 
+        Raises:
+            TypeError: If an element of *on* is not a
+                ``(Selector, Settings)`` pair.
+            ValueError: If an *on* entry sets a field that applies to none
+                of the operations its selector covers, such as
+                ``commit_level`` on a read selector.
+
         See Also:
             :meth:`get_settings`: Resolve the effective settings for an
             operation.
+            :class:`~aerospike_sdk.policy.selector.Selector`: How to name a
+            combination of operations.
         """
         patches: Dict[Scope, Settings] = {}
 
@@ -305,7 +363,7 @@ class Behavior:
         _set_if(patches, Scope.SYSTEM_TXN_VERIFY, system_txn_verify)
         _set_if(patches, Scope.SYSTEM_TXN_ROLL, system_txn_roll)
 
-        return Behavior(name=name, patches=patches, parent=self)
+        return Behavior(name=name, patches=patches, parent=self, on=on)
 
     def find_behavior(self, name: str) -> Optional[Behavior]:
         """Search this behavior and its descendants for one with *name*.
@@ -334,10 +392,12 @@ class Behavior:
         lines: list[str] = [f"Behavior: {self._name}"]
 
         lines.append("--- Patches ---")
-        if not self._patches:
+        if not self._patches and not self._on:
             lines.append("(no overrides)")
         for i, (scope, settings) in enumerate(self._patches.items(), 1):
             lines.append(f"{i:02d} {scope.value} -> {settings}")
+        for i, (selector, settings) in enumerate(self._on, len(self._patches) + 1):
+            lines.append(f"{i:02d} on {selector} -> {settings}")
 
         lines.append("--- Resolved Matrix ---")
         for key in _ALL_KEYS:
@@ -370,6 +430,9 @@ class Behavior:
             patch = self._patches.get(scope)
             if patch is not None:
                 base = Settings.merge(base, patch)
+        for selector, settings in self._on:
+            if selector._matches(kind, shape, mode):
+                base = Settings.merge(base, settings)
         return base
 
     def _resolve_txn(self, txn_scope: Scope) -> Settings:
@@ -382,6 +445,9 @@ class Behavior:
             patch = self._patches.get(scope)
             if patch is not None:
                 base = Settings.merge(base, patch)
+        for selector, settings in self._on:
+            if selector._matches_txn(txn_scope):
+                base = Settings.merge(base, settings)
         return base
 
     def __repr__(self) -> str:
@@ -389,12 +455,34 @@ class Behavior:
         if self._parent is not None:
             parts.append(f"parent={self._parent._name!r}")
         parts.append(f"patches={len(self._patches)}")
+        if self._on:
+            parts.append(f"on={len(self._on)}")
         if self._children:
             parts.append(f"children={len(self._children)}")
         return " ".join(parts) + ">"
 
 
 # -- Helpers ------------------------------------------------------------------
+
+def _checked_on(on: Optional[Iterable[_OnEntry]]) -> Tuple[_OnEntry, ...]:
+    """Copy *on* to a tuple, checking each entry's shape and field applicability."""
+    if on is None:
+        return ()
+    entries = tuple(on)
+    for position, entry in enumerate(entries):
+        if not (
+            isinstance(entry, tuple)
+            and len(entry) == 2
+            and isinstance(entry[0], Selector)
+            and isinstance(entry[1], Settings)
+        ):
+            raise TypeError(
+                f"on[{position}] must be a (Selector, Settings) pair, "
+                f"got {type(entry).__name__} {entry!r}"
+            )
+        _check_applicable(*entry)
+    return entries
+
 
 def _set_if(patches: Dict[Scope, Settings], scope: Scope, settings: Optional[Settings]) -> None:
     if settings is not None:

@@ -122,6 +122,7 @@ from aerospike_sdk.exp import Exp, val, in_list, map_keys, map_values
 from aerospike_sdk.hll_config import HllConfig
 from aerospike_sdk.operation_result import OperationResult
 from aerospike_sdk.policy.behavior import Behavior
+from aerospike_sdk.policy.selector import Selector
 from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.record_stream import RecordStream
 from aerospike_sdk.txn_status import TxnStatus
@@ -226,6 +227,7 @@ __all__ = [
     "SecondaryIndexError",
     "SecurityError",
     "SelectFlags",
+    "Selector",
     "SortedMap",
     "SerializationError",
     "Session",
