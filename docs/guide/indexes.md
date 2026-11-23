@@ -105,7 +105,10 @@ Query through it with the same handle:
 ```python
 stream = await (
     session.query(everything)
-    .where("$.created >= %s and $.created <= %s", one_week_ago, now)
+    .where(
+        PreparedAel("$.created >= ?since and $.created <= ?until"),
+        {"since": one_week_ago, "until": now},
+    )
     .execute()
 )
 ```

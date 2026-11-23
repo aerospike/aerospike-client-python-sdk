@@ -33,6 +33,7 @@ from typing import Self
 from aerospike_native import FilterExpression, Key
 
 from aerospike_sdk.operations_shared import _ChainVerbs, _ExpirationVerbs
+from aerospike_sdk.prepared_ael import PreparedAel
 from aerospike_sdk.server_filter import bind_ael_params
 
 if TYPE_CHECKING:  # Forward-reference only; the concrete classes live in aio.
@@ -159,19 +160,23 @@ class _UdfBuilderBase(_ExpirationVerbs[_QB], _ChainVerbs[_QB]):
     def where(self, expression: str, *params: Any) -> Self: ...
 
     @overload
+    def where(self, expression: PreparedAel, *params: Any) -> Self: ...
+
+    @overload
     def where(self, expression: FilterExpression) -> Self: ...
 
     def where(
         self,
-        expression: Union[str, FilterExpression],
+        expression: Union[str, PreparedAel, FilterExpression],
         *params: Any,
     ) -> Self:
         """Apply a filter expression so the UDF runs only when the predicate matches.
 
         Args:
-            expression: AEL string or ``FilterExpression``.
-            *params: Values for printf placeholders in an AEL template. See
-                :meth:`QueryBuilder.where` for the interpolation contract.
+            expression: AEL string, ``PreparedAel`` template or
+                ``FilterExpression``.
+            *params: One mapping for a ``PreparedAel``, or printf values. See
+                :meth:`QueryBuilder.where` for the two binding forms.
 
         Returns:
             This builder for chaining.

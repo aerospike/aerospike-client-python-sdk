@@ -136,7 +136,7 @@ Rule of thumb: **window API** when you're async, on a fast network, and want per
 The full-featured chainable API that mirrors the Aerospike SDK shape across languages.
 
 ```python
-from aerospike_sdk import Behavior, ClusterDefinition, DataSet, ErrorStrategy
+from aerospike_sdk import Behavior, ClusterDefinition, DataSet, ErrorStrategy, PreparedAel
 
 async with ClusterDefinition("localhost", 3000).connect() as cluster:
     session = cluster.create_session(Behavior.DEFAULT)
@@ -146,7 +146,10 @@ async with ClusterDefinition("localhost", 3000).connect() as cluster:
     # without one, the .where() falls back to a full-set scan)
     results = await (
         session.query(users)
-        .where("$.age > %s and $.country == '%s'", 25, "US")
+        .where(
+            PreparedAel("$.age > ?min_age and $.country == ?country"),
+            {"min_age": 25, "country": "US"},
+        )
         .execute()
     )
     async for r in results:

@@ -141,7 +141,12 @@ from aerospike_sdk.policy.policy_mapper import (
     to_read_policy,
     to_write_policy,
 )
-from aerospike_sdk.server_filter import bind_ael_params, filter_expression_from_ael_string
+from aerospike_sdk.prepared_ael import PreparedAel
+from aerospike_sdk.server_filter import (
+    bind_ael_params,
+    bind_prepared_ael_params,
+    filter_expression_from_ael_string,
+)
 from aerospike_sdk.error_strategy import (
     ErrorHandler,
     OnError,
@@ -952,11 +957,14 @@ class _QueryBuilderBase:
     def where(self, expression: str, *params: Any) -> QueryBuilder: ...
 
     @overload
+    def where(self, expression: PreparedAel, *params: Any) -> QueryBuilder: ...
+
+    @overload
     def where(self, expression: FilterExpression) -> QueryBuilder: ...
 
     def where(
         self,
-        expression: Union[str, FilterExpression],
+        expression: Union[str, PreparedAel, FilterExpression],
         *params: Any,
     ) -> Self:
         """Apply a server-side filter for dataset queries or keyed reads that support it.
@@ -965,27 +973,42 @@ class _QueryBuilderBase:
         :class:`~aerospike_native.FilterExpression` when constructing filters
         programmatically.
 
-        Supplying *params* interpolates them into the template with printf
-        syntax. Only trusted values belong here — interpolation does not quote
-        or escape, so it is no safer than an f-string.
+        *params* bind in one of two ways, chosen by the type of *expression*:
+
+        - A :class:`~aerospike_sdk.PreparedAel` template takes one mapping of
+          placeholder name to value and binds each value as a typed AEL
+          literal, quoted and escaped. Use it for any value the application
+          did not write itself.
+        - A plain string is a printf template. Interpolation does not quote or
+          escape, so it is no safer than an f-string; only trusted values
+          belong there.
 
         Args:
-            expression: AEL string or ``FilterExpression``.
-            *params: Values for printf placeholders in an AEL template.
+            expression: AEL string, ``PreparedAel`` template or
+                ``FilterExpression``.
+            *params: One mapping of placeholder name to value for a
+                ``PreparedAel``, or the printf values for a string.
 
         Returns:
             This builder for chaining.
 
         Raises:
-            TypeError: If *params* accompany a ``FilterExpression``.
-            ValueError: If the template is not a valid printf format string,
-                or ``where`` has already been called for this operation.
+            TypeError: If *params* accompany a ``FilterExpression``, the
+                values for a ``PreparedAel`` are not one mapping, or a value
+                has no AEL literal (``None`` in either form).
+            ValueError: If a ``PreparedAel`` cannot bind the values, the
+                string is not a valid printf format string, or ``where`` has
+                already been called for this operation.
 
         Example::
 
+            by_status = PreparedAel("$.status == ?status and $.score > ?min_score")
+
+            qb = session.query(ds).where(
+                by_status, {"status": status, "min_score": min_score},
+            )
             qb = session.query(ds).where("$.status == 'active'")
             qb = session.query(ds).where("$.score > %d", min_score)
-            qb = session.query(ds).where(f"$.score > {min_score}")
 
         See Also:
             :meth:`default_where`: Default filter for chained operations without their own.
@@ -1304,11 +1327,14 @@ class _QueryBuilderBase:
     def default_where(self, expression: str, *params: Any) -> QueryBuilder: ...
 
     @overload
+    def default_where(self, expression: PreparedAel, *params: Any) -> QueryBuilder: ...
+
+    @overload
     def default_where(self, expression: FilterExpression) -> QueryBuilder: ...
 
     def default_where(
         self,
-        expression: Union[str, FilterExpression],
+        expression: Union[str, PreparedAel, FilterExpression],
         *params: Any,
     ) -> Self:
         """Set a filter applied to any chained operation that does not call :meth:`where`.
@@ -1332,16 +1358,18 @@ class _QueryBuilderBase:
             # second upsert inherit default_where.
 
         Args:
-            expression: AEL string or ``FilterExpression``.
-            *params: Values for printf placeholders in an AEL template. See
-                :meth:`where` for the interpolation contract.
+            expression: AEL string, ``PreparedAel`` template or
+                ``FilterExpression``.
+            *params: One mapping for a ``PreparedAel``, or printf values. See
+                :meth:`where` for the two binding forms.
 
         Returns:
             This builder for chaining.
 
         Raises:
-            TypeError: If *params* accompany a ``FilterExpression``.
-            ValueError: If the template is not a valid printf format string.
+            TypeError: If *params* accompany a ``FilterExpression``, or a
+                value has no AEL literal.
+            ValueError: If the values cannot be bound into the template.
 
         See Also:
             :meth:`where`: Per-operation filter on the current operation.
@@ -4789,55 +4817,77 @@ class _BinWriteSteps(Generic[_W]):
 
     def select_from(
         self,
-        expression: Union[str, FilterExpression],
-        *,
+        expression: Union[str, PreparedAel, FilterExpression],
+        *params: Any,
         ignore_eval_failure: bool = False,
     ) -> _W:
-        """Read a computed value into this bin using an AEL expression."""
+        """Read a computed value into this bin using an AEL expression.
+
+        Pass a :class:`~aerospike_sdk.PreparedAel` template and one mapping of
+        placeholder name to value to bind typed AEL literals; a plain string
+        takes no params.
+        """
         parent = self._parent
         flags = ExpReadFlags.EVAL_NO_FAIL if ignore_eval_failure else ExpReadFlags.DEFAULT
-        expr = parent._expression_from_ael_string_for_ops(expression)
+        expr = parent._expression_from_ael_string_for_ops(
+            bind_prepared_ael_params(expression, params),
+        )
         return parent.add_operation(ExpOperation.read(self._bin, expr, flags))
 
     def insert_from(
         self,
-        expression: Union[str, FilterExpression],
-        *,
+        expression: Union[str, PreparedAel, FilterExpression],
+        *params: Any,
         ignore_op_failure: bool = False,
         ignore_eval_failure: bool = False,
         delete_if_null: bool = False,
     ) -> _W:
-        """Write expression result only if bin does not already exist."""
+        """Write expression result only if bin does not already exist.
+
+        Pass a :class:`~aerospike_sdk.PreparedAel` template and one mapping of
+        placeholder name to value to bind typed AEL literals; a plain string
+        takes no params.
+        """
         return self._exp_write(
-            expression, ExpWriteFlags.CREATE_ONLY,
+            bind_prepared_ael_params(expression, params), ExpWriteFlags.CREATE_ONLY,
             ignore_op_failure, ignore_eval_failure, delete_if_null,
         )
 
     def update_from(
         self,
-        expression: Union[str, FilterExpression],
-        *,
+        expression: Union[str, PreparedAel, FilterExpression],
+        *params: Any,
         ignore_op_failure: bool = False,
         ignore_eval_failure: bool = False,
         delete_if_null: bool = False,
     ) -> _W:
-        """Write expression result only if bin already exists."""
+        """Write expression result only if bin already exists.
+
+        Pass a :class:`~aerospike_sdk.PreparedAel` template and one mapping of
+        placeholder name to value to bind typed AEL literals; a plain string
+        takes no params.
+        """
         return self._exp_write(
-            expression, ExpWriteFlags.UPDATE_ONLY,
+            bind_prepared_ael_params(expression, params), ExpWriteFlags.UPDATE_ONLY,
             ignore_op_failure, ignore_eval_failure, delete_if_null,
         )
 
     def upsert_from(
         self,
-        expression: Union[str, FilterExpression],
-        *,
+        expression: Union[str, PreparedAel, FilterExpression],
+        *params: Any,
         ignore_op_failure: bool = False,
         ignore_eval_failure: bool = False,
         delete_if_null: bool = False,
     ) -> _W:
-        """Write expression result, creating or overwriting the bin."""
+        """Write expression result, creating or overwriting the bin.
+
+        Pass a :class:`~aerospike_sdk.PreparedAel` template and one mapping of
+        placeholder name to value to bind typed AEL literals; a plain string
+        takes no params.
+        """
         return self._exp_write(
-            expression, ExpWriteFlags.DEFAULT,
+            bind_prepared_ael_params(expression, params), ExpWriteFlags.DEFAULT,
             ignore_op_failure, ignore_eval_failure, delete_if_null,
         )
 
@@ -5991,8 +6041,8 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
 
     def select_from(
         self,
-        expression: Union[str, FilterExpression],
-        *,
+        expression: Union[str, PreparedAel, FilterExpression],
+        *params: Any,
         ignore_eval_failure: bool = False,
     ) -> _T:
         """Read a computed value into this bin using an AEL expression.
@@ -6000,7 +6050,10 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
         The result appears as a virtual bin in the returned record.
 
         Args:
-            expression: AEL string or pre-built FilterExpression.
+            expression: AEL string, ``PreparedAel`` template or pre-built
+                FilterExpression.
+            *params: One mapping of placeholder name to value for a
+                ``PreparedAel`` template; a plain string takes none.
             ignore_eval_failure: If True, silently return None when the
                 expression cannot be evaluated (e.g. missing bin).
 
@@ -6008,6 +6061,7 @@ class QueryBinBuilder(_WriteVerbs[_WriteSegmentBuilderBase], Generic[_T]):
             The parent builder for method chaining.
         """
         flags = ExpReadFlags.EVAL_NO_FAIL if ignore_eval_failure else ExpReadFlags.DEFAULT
+        expression = bind_prepared_ael_params(expression, params)
         if isinstance(expression, str):
             expr = self._parent._filter_expression_from_ael(expression)  # type: ignore[union-attr]
         else:

@@ -198,24 +198,104 @@ $.name == "Alice"
 $.name == 'Alice'
 ```
 
-Embed dynamic values either with an f-string or by passing params to
-`where()`, which interpolates them with printf syntax:
+A backslash escapes the next character inside either kind of quotes: `\'`,
+`\"`, `\\`, `\n`, `\r`, `\t`, `\0` and `\xHH`. A literal cannot contain a raw
+line break.
+
+### Binding Values
+
+To put a runtime value into an expression, write a
+{class}`~aerospike_sdk.PreparedAel` template with named placeholders and
+pass a mapping of the values after it. Each value binds as an AEL literal of
+its own type, quoted and escaped, so it can never change the shape of the
+expression:
+
+```python
+from aerospike_sdk import PreparedAel
+
+by_name_and_age = PreparedAel("$.name == ?name and $.age > ?min_age")
+
+stream = await (
+    session.query(users)
+    .where(by_name_and_age, {"name": "O'Brien", "min_age": 30})
+    .execute()
+)
+# the server receives:  $.name == 'O\'Brien' and $.age > 30
+```
+
+| Python value | Binds as |
+|--------------|----------|
+| `bool` | `true` / `false` |
+| `int` | a decimal integer |
+| `float` | a plain decimal with a decimal point, never an exponent |
+| `str` | a single-quoted, escaped string |
+| `bytes`, `bytearray`, `memoryview` | a blob literal, `X'ff00'` |
+| `list`, `tuple` | `[a, b]`, each element bound the same way |
+| `dict` | `{key: value}`; keys must be `str`, `int` or `bytes` |
+
+Things to know:
+
+- **Placeholders are named: `?name`, `?min_age`.** A name is an ASCII letter
+  or underscore followed by letters, digits or underscores, and is
+  case-sensitive. A name may repeat. A `?` followed by a digit, such as `?0`,
+  or a name that runs into a non-ASCII letter, such as `?año`, raises
+  `ValueError` when the template is constructed.
+- **The values go in one mapping.** It must hold exactly the template's
+  names: a missing name or one the template does not use raises `ValueError`,
+  which catches a misspelled key.
+- **Do not quote a placeholder.** The bound value brings its own quotes. Text
+  inside a quoted literal or a `/* ... */` comment is never a placeholder, so
+  `'?name'` stays the five characters `?name`.
+- **Types are strict, as they are on the server.** `$.price > 2` matches
+  nothing against a float bin, so a `float` always binds with a decimal point
+  and an `int` never does. Pass the type the bin holds.
+- **Values with no literal raise** before anything is sent: `None`, NaN and
+  infinity, an integer outside the signed 64-bit range, and a float whose
+  decimal form is longer than the 63 characters the server accepts (beyond
+  about `1e60`). Build those comparisons with `Exp`.
+- **Build the template once and reuse it.** It is scanned when constructed,
+  so a template held in a module constant costs only the binding on each
+  call. Constructing it inside the call repeats the scan every time.
+
+`where()` and `default_where()` on every builder accept a template, and so do
+`select_from()`, `insert_from()`, `update_from()` and `upsert_from()`. For
+any other API that takes AEL text, `bind()` takes the values as keyword
+arguments and returns the bound string:
+
+```python
+discount = PreparedAel("$.price * ?rate")
+
+await (
+    session.upsert(key)
+    .bin("sale_price")
+    .upsert_from(discount, {"rate": 0.85})
+    .execute()
+)
+print(discount.bind(rate=0.85))    # $.price * 0.85
+```
+
+#### printf interpolation
+
+`where()` and `default_where()` also take a plain string followed by params,
+which they interpolate with printf syntax. An f-string does the same job:
 
 ```python
 min_age = 18
-stream = await session.query(users).where(f"$.age > {min_age}").execute()
 stream = await session.query(users).where("$.age > %d", min_age).execute()
+stream = await session.query(users).where(f"$.age > {min_age}").execute()
 ```
 
-The printf form uses standard printf template syntax. Both forms are plain
-interpolation — **neither quotes nor escapes the value, so never pass untrusted
-input**. When the value is not trusted, use the `Exp` builder, which never
-round-trips through text.
+Both are plain text interpolation — **neither quotes nor escapes the value, so
+never pass untrusted input**. The value's Python text is what the server
+compiles: a string needs quotes written around it in the template and breaks
+the expression if it contains one, `bytes` and very small or large floats come
+out in forms the server rejects, and `%d` truncates a float. Use it for
+trusted numbers and constants; use `PreparedAel` for everything else.
 
-Two things to know about the printf form. Booleans are lowered to AEL's
-`true` / `false` rather than Python's `True`. And AEL's `%` (modulo) operator
-must be written `%%` whenever you pass params, since the template is a format
-string only then:
+Two more things to know about the printf form. Booleans are lowered to AEL's
+`true` / `false` rather than Python's `True`, and `None` raises `TypeError`.
+And AEL's `%` (modulo) operator must be written `%%` whenever you pass params,
+since the template is a format string only then:
 
 ```python
 session.query(users).where("$.id % 100 == 0")             # no params, plain %

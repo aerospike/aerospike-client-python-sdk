@@ -123,6 +123,7 @@ from aerospike_sdk.hll_config import HllConfig
 from aerospike_sdk.operation_result import OperationResult
 from aerospike_sdk.policy.behavior import Behavior
 from aerospike_sdk.policy.selector import Selector
+from aerospike_sdk.prepared_ael import PreparedAel
 from aerospike_sdk.record_result import RecordResult
 from aerospike_sdk.record_stream import RecordStream
 from aerospike_sdk.txn_status import TxnStatus
@@ -209,6 +210,7 @@ __all__ = [
     "Node",
     "Operation",
     "OperationResult",
+    "PreparedAel",
     "QueryDuration",
     "QueryHint",
     "QueryError",
