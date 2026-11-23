@@ -83,6 +83,7 @@ Shared types used by both async and sync APIs.
 | Class / Function | Description |
 |-----------------|-------------|
 | [`Exp`](exp.md) | Programmatic expression builder |
+| [`PreparedAel`](prepared-ael.md) | AEL template that binds parameters as typed literals |
 
 String AEL for `.where()` is compiled on the server (field 43) — see the
 [AEL guide](../guide/expression-ael.md).
@@ -146,4 +147,5 @@ query-hint
 metrics
 loggers
 exp
+prepared-ael
 ```

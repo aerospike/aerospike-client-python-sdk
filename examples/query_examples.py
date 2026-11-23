@@ -23,6 +23,7 @@ from aerospike_sdk import (
     IndexType,
     ListOrderType,
     MapOrder,
+    PreparedAel,
     QueryDuration,
     QueryHint,
     ResultCode,
@@ -554,16 +555,24 @@ async def demonstrate_sorting_and_pagination(session) -> None:
 
 async def demonstrate_reusable_filter(session) -> None:
     # --- 10) A reusable AEL filter with bound parameters ---
-    # A reusable AEL template; where() binds the printf-style parameters per call.
-    name_and_age_filter = "$.name == '%s' and $.age > %d"
+    # A reusable AEL template; where() binds each named value as a typed literal.
+    name_and_age_filter = PreparedAel("$.name == ?name and $.age > ?min_age")
 
     print("\nReusable filter (Tim, age > 30):")
-    stream = await session.query(SET).where(name_and_age_filter, "Tim", 30).execute()
+    stream = await (
+        session.query(SET)
+        .where(name_and_age_filter, {"name": "Tim", "min_age": 30})
+        .execute()
+    )
     await _print_stream(stream)
     stream.close()
 
     print("Reusable filter (Jane, age > 21):")
-    stream = await session.query(SET).where(name_and_age_filter, "Jane", 21).execute()
+    stream = await (
+        session.query(SET)
+        .where(name_and_age_filter, {"name": "Jane", "min_age": 21})
+        .execute()
+    )
     await _print_stream(stream)
     stream.close()
 

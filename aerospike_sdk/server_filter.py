@@ -17,31 +17,52 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, Union
 
 from aerospike_native import FilterExpression
 
 from aerospike_sdk.exceptions import AerospikeError, ResultCode
+from aerospike_sdk.prepared_ael import PreparedAel
+
+
+def _bind_prepared(expression: PreparedAel, params: tuple[Any, ...]) -> str:
+    if not params:
+        return expression.bind()
+    values = params[0]
+    if len(params) != 1 or not (type(values) is dict or isinstance(values, Mapping)):
+        raise TypeError(
+            "pass the values for a PreparedAel as one mapping of placeholder "
+            'name to value, like where(template, {"min_age": 21})',
+        )
+    return expression._bind(values)
 
 
 def bind_ael_params(
-    expression: Union[str, FilterExpression],
+    expression: Union[str, PreparedAel, FilterExpression],
     params: tuple[Any, ...],
 ) -> Union[str, FilterExpression]:
-    """Interpolate printf-style *params* into an AEL template.
+    """Bind *params* into an AEL template.
 
-    An empty *params* passes the template through untouched, so an AEL string is
-    only ever treated as a format string when the caller supplies values. Use
-    ``%%`` to escape literal ``%`` when params are supplied.
+    A :class:`~aerospike_sdk.PreparedAel` takes one mapping of placeholder
+    name to value and binds each value as a typed AEL literal. A plain string
+    is a printf template: an empty *params* passes it through untouched, so an
+    AEL string is only ever treated as a format string when the caller
+    supplies values. Use ``%%`` to escape literal ``%`` when params are
+    supplied.
 
-    Booleans are lowered to ``true`` / ``false`` and ``None`` to ``null``;
-    Python's ``%s`` would otherwise emit ``True`` or ``None``, which the AEL
-    parser rejects.
+    In the printf form booleans are lowered to ``true`` / ``false``; Python's
+    ``%s`` would otherwise emit ``True``, which the AEL parser rejects.
 
     Raises:
-        TypeError: If *params* accompany a non-string expression.
-        ValueError: If the template is not a valid printf format string.
+        TypeError: If *params* accompany a ``FilterExpression``, the values
+            for a ``PreparedAel`` are not one mapping, a value has no AEL
+            literal, or a printf param is ``None``.
+        ValueError: If the template is not a valid printf format string, or a
+            ``PreparedAel`` cannot bind the values.
     """
+    if isinstance(expression, PreparedAel):
+        return _bind_prepared(expression, params)
     if not params:
         return expression
     if not isinstance(expression, str):
@@ -49,15 +70,12 @@ def bind_ael_params(
             "AEL params require a string template, got "
             f"{type(expression).__name__}",
         )
+    for p in params:
+        if p is None:
+            # AEL has no null literal; the server rejects the word wherever it appears.
+            raise TypeError("None has no AEL literal and cannot be bound")
     bound = tuple(
-        "true"
-        if p is True
-        else "false"
-        if p is False
-        else "null"
-        if p is None
-        else p
-        for p in params
+        ["true" if p is True else "false" if p is False else p for p in params],
     )
     try:
         return expression % bound
@@ -66,6 +84,26 @@ def bind_ael_params(
             f"cannot bind params into AEL template {expression!r}: {exc}. "
             "AEL's '%' (modulo) must be written '%%' when params are supplied.",
         ) from exc
+
+
+def bind_prepared_ael_params(
+    expression: Union[str, PreparedAel, FilterExpression],
+    params: tuple[Any, ...],
+) -> Union[str, FilterExpression]:
+    """Bind *params* for a method that takes them only with a ``PreparedAel``.
+
+    Raises:
+        TypeError: If *params* accompany anything but a ``PreparedAel``, or
+            are not one mapping.
+    """
+    if isinstance(expression, PreparedAel):
+        return _bind_prepared(expression, params)
+    if params:
+        raise TypeError(
+            "params require a PreparedAel template, got "
+            f"{type(expression).__name__}",
+        )
+    return expression
 
 
 def filter_expression_from_ael_string(

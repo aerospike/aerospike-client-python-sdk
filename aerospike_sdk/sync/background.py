@@ -31,6 +31,7 @@ from aerospike_sdk.aio.background import (
     BackgroundWriteBinBuilder,
 )
 from aerospike_sdk.dataset import DataSet
+from aerospike_sdk.prepared_ael import PreparedAel
 
 
 class BackgroundOperationBuilder:
@@ -69,11 +70,14 @@ class BackgroundOperationBuilder:
     def where(self, expression: str, *params: Any) -> BackgroundOperationBuilder: ...
 
     @overload
+    def where(self, expression: PreparedAel, *params: Any) -> BackgroundOperationBuilder: ...
+
+    @overload
     def where(self, expression: FilterExpression) -> BackgroundOperationBuilder: ...
 
     def where(
         self,
-        expression: Union[str, FilterExpression],
+        expression: Union[str, PreparedAel, FilterExpression],
         *params: Any,
     ) -> BackgroundOperationBuilder:
         """Restrict the job with an AEL or filter predicate.
@@ -267,11 +271,14 @@ class BackgroundUdfBuilder:
     def where(self, expression: str, *params: Any) -> BackgroundUdfBuilder: ...
 
     @overload
+    def where(self, expression: PreparedAel, *params: Any) -> BackgroundUdfBuilder: ...
+
+    @overload
     def where(self, expression: FilterExpression) -> BackgroundUdfBuilder: ...
 
     def where(
         self,
-        expression: Union[str, FilterExpression],
+        expression: Union[str, PreparedAel, FilterExpression],
         *params: Any,
     ) -> BackgroundUdfBuilder:
         """Optional predicate limiting which records invoke the UDF."""

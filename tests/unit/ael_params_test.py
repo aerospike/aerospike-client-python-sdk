@@ -71,8 +71,10 @@ class TestBooleanLowering:
     def test_false_is_lowered(self):
         assert bind_ael_params("$.flag == %s", (False,)) == "$.flag == false"
 
-    def test_none_is_lowered(self):
-        assert bind_ael_params("$.flag == %s", (None,)) == "$.flag == null"
+    def test_none_raises(self):
+        """AEL has no null literal, so there is nothing to lower ``None`` to."""
+        with pytest.raises(TypeError, match="None has no AEL literal"):
+            bind_ael_params("$.flag == %s", (None,))
 
     def test_int_one_is_not_lowered(self):
         """``1 is True`` is false in Python, so integers keep their identity."""

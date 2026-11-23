@@ -40,6 +40,7 @@ from aerospike_sdk.background_shared import (
 )
 from aerospike_sdk.dataset import DataSet
 from aerospike_sdk.query_shared import _BACKGROUND_IN_TXN_ERROR, _BinWriteSteps, _W
+from aerospike_sdk.prepared_ael import PreparedAel
 from aerospike_sdk.server_filter import bind_ael_params, filter_expression_from_ael_string
 from aerospike_sdk.exceptions import _convert_pnc_exception
 from aerospike_sdk.metrics import usage
@@ -245,11 +246,14 @@ class _BackgroundOperationBuilderBase:
     def where(self, expression: str, *params: Any) -> BackgroundOperationBuilder: ...
 
     @overload
+    def where(self, expression: PreparedAel, *params: Any) -> BackgroundOperationBuilder: ...
+
+    @overload
     def where(self, expression: FilterExpression) -> BackgroundOperationBuilder: ...
 
     def where(
         self,
-        expression: Union[str, FilterExpression],
+        expression: Union[str, PreparedAel, FilterExpression],
         *params: Any,
     ) -> BackgroundOperationBuilder:
         """Restrict the job with an AEL or ``FilterExpression`` predicate.
@@ -260,10 +264,11 @@ class _BackgroundOperationBuilderBase:
         reaches the records by scanning the set.
 
         Args:
-            expression: AEL string or ``FilterExpression``.
-            *params: Values for printf placeholders in an AEL template. See
+            expression: AEL string, ``PreparedAel`` template or
+                ``FilterExpression``.
+            *params: One mapping for a ``PreparedAel``, or printf values. See
                 :meth:`~aerospike_sdk.query_shared._QueryBuilderBase.where`
-                for the interpolation contract.
+                for the two binding forms.
 
         Returns:
             This builder for chaining.
@@ -274,7 +279,7 @@ class _BackgroundOperationBuilderBase:
         Example::
 
             await session.background_task().delete(users).where(
-                "$.status == '%s'", status,
+                PreparedAel("$.status == ?status"), {"status": status},
             ).execute()
         """
         if self._filter_expression is not None:
@@ -713,11 +718,14 @@ class _BackgroundUdfBuilderBase:
     def where(self, expression: str, *params: Any) -> BackgroundUdfBuilder: ...
 
     @overload
+    def where(self, expression: PreparedAel, *params: Any) -> BackgroundUdfBuilder: ...
+
+    @overload
     def where(self, expression: FilterExpression) -> BackgroundUdfBuilder: ...
 
     def where(
         self,
-        expression: Union[str, FilterExpression],
+        expression: Union[str, PreparedAel, FilterExpression],
         *params: Any,
     ) -> BackgroundUdfBuilder:
         """Optional predicate limiting which records invoke the UDF.
